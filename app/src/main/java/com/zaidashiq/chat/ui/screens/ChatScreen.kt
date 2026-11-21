@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -334,7 +335,7 @@ fun ChatScreen(
                                 .testTag("chat_send_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.Send,
+                                imageVector = Icons.AutoMirrored.Rounded.Send,
                                 contentDescription = "Send message",
                                 tint = TextOnDark,
                                 modifier = Modifier.size(20.dp)

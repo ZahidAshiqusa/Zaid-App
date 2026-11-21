@@ -10,6 +10,8 @@ import com.zaidashiq.chat.data.network.RailwayApiService
 import com.zaidashiq.chat.data.network.RetrofitClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 
 class ChatRepository(
@@ -20,9 +22,7 @@ class ChatRepository(
 
     private suspend fun api(): RailwayApiService {
         if (!BackendConfig.isRailwayConfigured) {
-            throw IllegalStateException(
-                "RAILWAY_BACKEND_URL is not configured yet. Deploy the railway/ folder to Railway and add your public URL in the AI Studio Secrets panel."
-            )
+            throw IllegalStateException("Service Not Available")
         }
         return cachedApi ?: RetrofitClient.create(sessionPreferences.getOrCreateDeviceId()).also {
             cachedApi = it
@@ -202,20 +202,47 @@ class ChatRepository(
         type: String,
         uri: Uri,
         caption: String,
-        fallbackMime: String
+        fallbackMime: String,
+        privacyMode: String = "everyone",
+        onMetaResolved: (fileName: String, totalBytes: Long) -> Unit = { _, _ -> },
+        onProgress: (bytesUploaded: Long, totalBytes: Long) -> Unit = { _, _ -> }
     ): Result<GenericActionResponse> = withContext(Dispatchers.IO) {
         safeCall {
-            val mime = context.contentResolver.getType(uri) ?: fallbackMime
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: throw IllegalStateException("Could not read selected status file")
-            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            api().uploadStatus(
-                StatusUploadRequest(
-                    type = type,
-                    caption = caption,
-                    mediaData = b64,
-                    mimetype = mime
-                )
+            val defaultName = when (type) {
+                "video" -> "status_video.mp4"
+                "voice" -> "status_voice.ogg"
+                else -> "status_photo.jpg"
+            }
+            val meta = com.zaidashiq.chat.data.network.resolveUriMeta(
+                contentResolver = context.contentResolver,
+                uri = uri,
+                fallbackName = defaultName,
+                fallbackMime = fallbackMime
+            )
+            onMetaResolved(meta.displayName, meta.sizeBytes)
+
+            val progressBody = com.zaidashiq.chat.data.network.ProgressRequestBody(
+                contentResolver = context.contentResolver,
+                uri = uri,
+                contentTypeStr = meta.mimeType,
+                knownSize = meta.sizeBytes,
+                onProgress = onProgress
+            )
+            val filePart = okhttp3.MultipartBody.Part.createFormData(
+                name = "file",
+                filename = meta.displayName,
+                body = progressBody
+            )
+            val textPlain = "text/plain".toMediaType()
+            val captionBody = caption.toRequestBody(textPlain)
+            val voiceFlagBody = (type == "voice").toString().toRequestBody(textPlain)
+            val privacyBody = privacyMode.toRequestBody(textPlain)
+
+            api().uploadStatusMultipart(
+                file = filePart,
+                caption = captionBody,
+                isVoiceNote = voiceFlagBody,
+                privacyMode = privacyBody
             )
         }
     }

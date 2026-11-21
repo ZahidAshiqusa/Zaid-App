@@ -14,6 +14,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -56,6 +58,7 @@ fun HomeScreen(
     onOpenPairing: () -> Unit,
     onUploadTextStatus: (String, String) -> Unit,
     onUploadMediaStatus: (type: String, uri: Uri, caption: String, mime: String) -> Unit,
+    onDismissStatusProgress: () -> Unit,
     onForwardStatus: (String) -> Unit
 ) {
     var overflowExpanded by remember { mutableStateOf(false) }
@@ -129,7 +132,7 @@ fun HomeScreen(
                         .testTag("home_new_chat_fab")
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Chat,
+                        imageVector = Icons.AutoMirrored.Rounded.Chat,
                         contentDescription = stringResource(R.string.action_new_chat)
                     )
                 }
@@ -159,7 +162,7 @@ fun HomeScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(onClick = { onToggleSearch(false) }) {
-                            Icon(Icons.Rounded.ArrowBack, contentDescription = "Close search", tint = TextOnDark)
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Close search", tint = TextOnDark)
                         }
                         TextField(
                             value = uiState.searchQuery,
@@ -388,6 +391,16 @@ fun HomeScreen(
                 }
             }
 
+            // Active Status Upload Progress Banner when user uploads from Camera shortcut on another tab
+            if (uiState.selectedTab != HomeTab.STATUS && uiState.statusUploadProgress.isVisible) {
+                Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    StatusUploadProgressCard(
+                        progress = uiState.statusUploadProgress,
+                        onDismiss = onDismissStatusProgress
+                    )
+                }
+            }
+
             // Tab Body Content
             Box(
                 modifier = Modifier
@@ -405,7 +418,8 @@ fun HomeScreen(
 
                     HomeTab.STATUS -> StatusTabBody(
                         statuses = uiState.capturedStatuses,
-                        isBusy = uiState.isProcessingTool,
+                        uploadProgress = uiState.statusUploadProgress,
+                        onDismissUploadProgress = onDismissStatusProgress,
                         onUploadTextClick = { showTextStatusDialog = true },
                         onUploadPhotoClick = {
                             statusPhotoPicker.launch(
@@ -688,7 +702,8 @@ private fun ChatListRow(
 @Composable
 private fun StatusTabBody(
     statuses: List<CapturedStatusItem>,
-    isBusy: Boolean,
+    uploadProgress: com.zaidashiq.chat.ui.viewmodel.StatusUploadProgress,
+    onDismissUploadProgress: () -> Unit,
     onUploadTextClick: () -> Unit,
     onUploadPhotoClick: () -> Unit,
     onUploadVideoClick: () -> Unit,
@@ -717,23 +732,26 @@ private fun StatusTabBody(
                             Text("Auto-React", color = DeepEmerald)
                         }
                     }
-                    if (isBusy) {
-                        LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                            color = DeepEmerald
-                        )
-                    }
                     Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        StatusQuickChip("Text", Icons.Rounded.Edit, Modifier.weight(1f), onUploadTextClick)
-                        StatusQuickChip("Photo", Icons.Rounded.Image, Modifier.weight(1f), onUploadPhotoClick)
-                        StatusQuickChip("Video", Icons.Rounded.Videocam, Modifier.weight(1f), onUploadVideoClick)
-                        StatusQuickChip("Voice", Icons.Rounded.Mic, Modifier.weight(1f), onUploadVoiceClick)
+                        StatusQuickChip("Text", Icons.Rounded.Edit, Modifier.weight(1f), !uploadProgress.isActive, onUploadTextClick)
+                        StatusQuickChip("Photo", Icons.Rounded.Image, Modifier.weight(1f), !uploadProgress.isActive, onUploadPhotoClick)
+                        StatusQuickChip("Video", Icons.Rounded.Videocam, Modifier.weight(1f), !uploadProgress.isActive, onUploadVideoClick)
+                        StatusQuickChip("Voice", Icons.Rounded.Mic, Modifier.weight(1f), !uploadProgress.isActive, onUploadVoiceClick)
                     }
                 }
+            }
+        }
+
+        if (uploadProgress.isVisible) {
+            item {
+                StatusUploadProgressCard(
+                    progress = uploadProgress,
+                    onDismiss = onDismissUploadProgress
+                )
             }
         }
 
@@ -807,22 +825,33 @@ private fun StatusQuickChip(
     label: String,
     icon: ImageVector,
     modifier: Modifier,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     Surface(
         onClick = onClick,
+        enabled = enabled,
         shape = RoundedCornerShape(14.dp),
-        color = SurfacePureWhite,
-        modifier = modifier.height(64.dp)
+        color = if (enabled) SurfacePureWhite else SurfacePureWhite.copy(alpha = 0.55f),
+        modifier = modifier.height(64.dp).testTag("status_upload_chip_${label.lowercase()}")
     ) {
         Column(
             modifier = Modifier.fillMaxSize().padding(6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Icon(icon, contentDescription = label, tint = DeepEmerald, modifier = Modifier.size(20.dp))
+            Icon(
+                icon,
+                contentDescription = label,
+                tint = if (enabled) DeepEmerald else TextSecondary,
+                modifier = Modifier.size(20.dp)
+            )
             Spacer(Modifier.height(4.dp))
-            Text(label, style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (enabled) TextPrimary else TextSecondary
+            )
         }
     }
 }

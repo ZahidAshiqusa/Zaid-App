@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -252,7 +253,7 @@ fun MediaDownloadSheet(
                         Spacer(Modifier.width(10.dp))
                         Text("Fetching & Sending Media…")
                     } else {
-                        Icon(Icons.Rounded.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text("Download & Send ${tool.title}")
                     }
@@ -459,7 +460,7 @@ fun VoiceNoteSheet(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = if (isRecording) Icons.Rounded.Send else Icons.Rounded.Mic,
+                    imageVector = if (isRecording) Icons.AutoMirrored.Rounded.Send else Icons.Rounded.Mic,
                     contentDescription = if (isRecording) "Stop and Send Voice Note" else "Start Recording",
                     tint = TextOnDark,
                     modifier = Modifier.size(36.dp)

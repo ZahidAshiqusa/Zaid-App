@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -166,12 +167,11 @@ fun PairingScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = if (uiState.backendHealthy) {
-                                "Railway Baileys Bridge Online"
-                            } else if (!BackendConfig.isRailwayConfigured) {
-                                "Set RAILWAY_BACKEND_URL in Secrets"
-                            } else {
-                                "Connecting to Railway Backend…"
+                            text = when {
+                                uiState.backendHealthy -> stringResource(R.string.service_online)
+                                !BackendConfig.isRailwayConfigured -> stringResource(R.string.service_not_available)
+                                !uiState.bannerNotice.isNullOrBlank() -> stringResource(R.string.service_not_available)
+                                else -> stringResource(R.string.service_connecting)
                             },
                             style = MaterialTheme.typography.labelMedium,
                             color = pillTextColor
@@ -358,7 +358,7 @@ fun PairingScreen(
                 )
                 Spacer(Modifier.width(4.dp))
                 Icon(
-                    imageVector = Icons.Rounded.ArrowForward,
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
                     contentDescription = null,
                     tint = DeepEmerald,
                     modifier = Modifier.size(18.dp)

@@ -13,6 +13,9 @@
     <string name="pairing_waiting_status">Waiting for WhatsApp confirmation…</string>
     <string name="pairing_instructions">Open WhatsApp → Linked Devices → Link a Device → Link with phone number instead, then enter the code above.</string>
     <string name="pairing_continue_demo">Preview App Offline</string>
+    <string name="service_not_available">Service Not Available</string>
+    <string name="service_online">Service Online</string>
+    <string name="service_connecting">Connecting to Service…</string>
 
     <!-- Main Tabs -->
     <string name="tab_chats">CHATS</string>

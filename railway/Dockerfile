@@ -1,27 +1,25 @@
-FROM node:22-bookworm-slim
+FROM node:20-alpine
 
-RUN apt-get update && apt-get install -y \
+RUN apk add --no-cache \
     ffmpeg \
+    git \
     python3 \
     make \
     g++ \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    tzdata
 
 WORKDIR /app
 
 COPY package.json ./
-
-RUN npm install --omit=dev --legacy-peer-deps --ignore-scripts && \
-    (npm rebuild sharp || true)
+RUN npm install --omit=dev --no-audit --no-fund
 
 COPY . .
 
-RUN mkdir -p tmp session data /app/data/sessions /app/data/vault
+RUN mkdir -p /app/data/sessions /app/tmp
 
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV RAILWAY_VOLUME_MOUNT_PATH=/app/data
 
 EXPOSE 3000
 

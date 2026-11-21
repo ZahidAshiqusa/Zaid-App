@@ -7,13 +7,30 @@ object BackendConfig {
     private const val PLACEHOLDER_SUPABASE = "https://your-project.supabase.co"
     private const val PLACEHOLDER_GIPHY = "your_giphy_api_key"
 
+    private fun sanitizeValue(raw: String): String =
+        raw.trim().trim('"', '\'').trim()
+
     val rawRailwayUrl: String
-        get() = BuildConfig.RAILWAY_BACKEND_URL.trim().trimEnd('/')
+        get() {
+            val cleaned = sanitizeValue(BuildConfig.RAILWAY_BACKEND_URL).trimEnd('/')
+            if (cleaned.isBlank() ||
+                cleaned.equals("UNSET", ignoreCase = true) ||
+                cleaned.equals(PLACEHOLDER_RAILWAY, ignoreCase = true) ||
+                cleaned.contains("your-railway-backend", ignoreCase = true)
+            ) {
+                return ""
+            }
+            return if (cleaned.startsWith("http://", ignoreCase = true) ||
+                cleaned.startsWith("https://", ignoreCase = true)
+            ) {
+                cleaned
+            } else {
+                "https://$cleaned"
+            }
+        }
 
     val isRailwayConfigured: Boolean
-        get() = rawRailwayUrl.isNotBlank() &&
-            !rawRailwayUrl.equals(PLACEHOLDER_RAILWAY, ignoreCase = true) &&
-            (rawRailwayUrl.startsWith("http://") || rawRailwayUrl.startsWith("https://"))
+        get() = rawRailwayUrl.isNotBlank()
 
     val normalizedRailwayBaseUrl: String
         get() = if (isRailwayConfigured) {
@@ -22,16 +39,63 @@ object BackendConfig {
             "$PLACEHOLDER_RAILWAY/"
         }
 
-    val isSupabaseConfigured: Boolean
-        get() = BuildConfig.SUPABASE_URL.isNotBlank() &&
-            !BuildConfig.SUPABASE_URL.equals(PLACEHOLDER_SUPABASE, ignoreCase = true) &&
-            BuildConfig.SUPABASE_PUBLISHABLE_KEY.isNotBlank() &&
-            BuildConfig.SUPABASE_PUBLISHABLE_KEY != "your_supabase_publishable_key"
+    val supabaseUrl: String
+        get() {
+            val cleaned = sanitizeValue(BuildConfig.SUPABASE_URL).trimEnd('/')
+            if (cleaned.isBlank() ||
+                cleaned.equals("UNSET", ignoreCase = true) ||
+                cleaned.equals(PLACEHOLDER_SUPABASE, ignoreCase = true) ||
+                cleaned.contains("your-project.supabase.co", ignoreCase = true)
+            ) {
+                return ""
+            }
+            return if (cleaned.startsWith("http://", ignoreCase = true) ||
+                cleaned.startsWith("https://", ignoreCase = true)
+            ) {
+                cleaned
+            } else {
+                "https://$cleaned"
+            }
+        }
 
-    val isGiphyConfigured: Boolean
-        get() = BuildConfig.GIPHY_API_KEY.isNotBlank() &&
-            BuildConfig.GIPHY_API_KEY != PLACEHOLDER_GIPHY
+    val supabasePublishableKey: String
+        get() {
+            val cleaned = sanitizeValue(BuildConfig.SUPABASE_PUBLISHABLE_KEY)
+            return if (cleaned.isBlank() ||
+                cleaned.equals("UNSET", ignoreCase = true) ||
+                cleaned == "your_supabase_publishable_key"
+            ) {
+                ""
+            } else {
+                cleaned
+            }
+        }
+
+    val isSupabaseConfigured: Boolean
+        get() = supabaseUrl.isNotBlank() && supabasePublishableKey.isNotBlank()
 
     val giphyApiKey: String
-        get() = if (isGiphyConfigured) BuildConfig.GIPHY_API_KEY.trim() else ""
+        get() {
+            val cleaned = sanitizeValue(BuildConfig.GIPHY_API_KEY)
+            return if (cleaned.isBlank() ||
+                cleaned.equals("UNSET", ignoreCase = true) ||
+                cleaned == PLACEHOLDER_GIPHY
+            ) {
+                ""
+            } else {
+                cleaned
+            }
+        }
+
+    val isGiphyConfigured: Boolean
+        get() = giphyApiKey.isNotBlank()
+
+    val defaultOwnerNumber: String
+        get() = sanitizeValue(BuildConfig.OWNER_NUMBER)
+            .takeUnless { it.equals("UNSET", ignoreCase = true) }
+            ?.filter { it.isDigit() }
+            .orEmpty()
+
+    val timezone: String
+        get() = sanitizeValue(BuildConfig.TIMEZONE).ifBlank { "Asia/Karachi" }
 }

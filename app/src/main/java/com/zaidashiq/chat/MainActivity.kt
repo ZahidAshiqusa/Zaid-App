@@ -96,6 +96,7 @@ fun ZaidAshiqChatApp(
                         onOpenPairing = { navController.navigate(PairingRoute) },
                         onUploadTextStatus = viewModel::uploadTextStatus,
                         onUploadMediaStatus = viewModel::uploadMediaStatus,
+                        onDismissStatusProgress = viewModel::dismissStatusUploadProgress,
                         onForwardStatus = viewModel::forwardCapturedStatus
                     )
                 }

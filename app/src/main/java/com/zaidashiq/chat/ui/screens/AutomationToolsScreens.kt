@@ -13,6 +13,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ForwardToInbox
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,7 +47,7 @@ private fun ToolScaffold(
                 title = { Text(title, color = TextOnDark, style = MaterialTheme.typography.titleLarge) },
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("tool_back_button")) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = TextOnDark)
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = TextOnDark)
                     }
                 },
                 actions = actions,
@@ -170,7 +172,7 @@ fun VaultScreen(
                                 )
                             }
                             IconButton(onClick = { onForwardItem(item.id) }) {
-                                Icon(Icons.Rounded.ForwardToInbox, contentDescription = "Forward to DM", tint = DeepEmerald)
+                                Icon(Icons.AutoMirrored.Rounded.ForwardToInbox, contentDescription = "Forward to DM", tint = DeepEmerald)
                             }
                         }
                     }
@@ -500,13 +502,13 @@ fun ConnectionSettingsScreen(
                     Text("Railway Baileys Bridge", style = MaterialTheme.typography.titleMedium, color = DeepEmerald)
 
                     StatusInfoRow(
-                        label = "RAILWAY_BACKEND_URL",
-                        value = if (BackendConfig.isRailwayConfigured) BackendConfig.rawRailwayUrl else "Not set in AI Studio Secrets",
+                        label = "Backend Service",
+                        value = if (BackendConfig.isRailwayConfigured) BackendConfig.rawRailwayUrl else "Service Not Available",
                         ok = BackendConfig.isRailwayConfigured
                     )
                     StatusInfoRow(
                         label = "Backend Health",
-                        value = if (uiState.backendHealthy) "Online (${uiState.backendUptime.ifBlank { "Active" }})" else "Offline / Waiting",
+                        value = if (uiState.backendHealthy) "Online (${uiState.backendUptime.ifBlank { "Active" }})" else "Service Not Available",
                         ok = uiState.backendHealthy
                     )
                     StatusInfoRow(
@@ -523,6 +525,16 @@ fun ConnectionSettingsScreen(
                         label = "Giphy API Key",
                         value = if (BackendConfig.isGiphyConfigured) "Configured via Secrets" else "Optional — Set GIPHY_API_KEY in Secrets",
                         ok = BackendConfig.isGiphyConfigured
+                    )
+                    StatusInfoRow(
+                        label = "Timezone & Region",
+                        value = BackendConfig.timezone,
+                        ok = true
+                    )
+                    StatusInfoRow(
+                        label = "PostgreSQL (DATABASE_URL)",
+                        value = "Managed server-side in Railway Variables (never embedded in APK)",
+                        ok = uiState.backendHealthy
                     )
 
                     Spacer(Modifier.height(6.dp))

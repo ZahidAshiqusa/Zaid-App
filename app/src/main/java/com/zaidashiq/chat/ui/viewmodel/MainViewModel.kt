@@ -39,10 +39,47 @@ enum class ChatToolType(val title: String, val platformKey: String, val hint: St
     DOWNLOADER("Downloader", "downloader", "Paste any media link or search GIFs via Giphy")
 }
 
+enum class UploadStage {
+    IDLE,
+    PREPARING,
+    UPLOADING,
+    PROCESSING,
+    COMPLETED,
+    FAILED
+}
+
+data class StatusUploadProgress(
+    val stage: UploadStage = UploadStage.IDLE,
+    val mediaType: String = "",
+    val mediaLabel: String = "",
+    val fileName: String = "",
+    val bytesUploaded: Long = 0L,
+    val totalBytes: Long = 0L,
+    val statusMessage: String = ""
+) {
+    val isVisible: Boolean
+        get() = stage != UploadStage.IDLE
+
+    val isActive: Boolean
+        get() = stage == UploadStage.PREPARING ||
+            stage == UploadStage.UPLOADING ||
+            stage == UploadStage.PROCESSING
+
+    val fraction: Float?
+        get() = when {
+            stage == UploadStage.COMPLETED || stage == UploadStage.PROCESSING -> 1f
+            totalBytes > 0L -> (bytesUploaded.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+            else -> null
+        }
+
+    val percent: Int
+        get() = ((fraction ?: 0f) * 100f).toInt().coerceIn(0, 100)
+}
+
 data class MainUiState(
     val isInitialized: Boolean = false,
     val isLinked: Boolean = false,
-    val linkedPhone: String = "",
+    val linkedPhone: String = BackendConfig.defaultOwnerNumber,
     val backendHealthy: Boolean = false,
     val backendUptime: String = "",
     val pairingCode: String? = null,
@@ -59,6 +96,7 @@ data class MainUiState(
     val channels: List<ChannelItem> = emptyList(),
     val calls: List<CallRecordItem> = emptyList(),
     val capturedStatuses: List<CapturedStatusItem> = emptyList(),
+    val statusUploadProgress: StatusUploadProgress = StatusUploadProgress(),
     val activeChatMessages: List<ChatMessageItem> = emptyList(),
     val isLoadingChat: Boolean = false,
     val isSendingMessage: Boolean = false,
@@ -132,7 +170,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update {
                 it.copy(
                     backendHealthy = false,
-                    bannerNotice = "Set RAILWAY_BACKEND_URL in AI Studio Secrets after deploying railway/ to connect live WhatsApp."
+                    bannerNotice = "Service Not Available"
                 )
             }
             return
@@ -155,11 +193,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (connectedPhone.isNotBlank()) {
                     loadAllHomeData()
                 }
-            }.onFailure { err ->
+            }.onFailure {
                 _uiState.update {
                     it.copy(
                         backendHealthy = false,
-                        bannerNotice = "Railway backend unreachable: ${err.message ?: "Check RAILWAY_BACKEND_URL"}"
+                        bannerNotice = "Service Not Available"
                     )
                 }
             }
@@ -696,33 +734,137 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Status Tab Actions
+    fun dismissStatusUploadProgress() {
+        _uiState.update { it.copy(statusUploadProgress = StatusUploadProgress()) }
+    }
+
     fun uploadTextStatus(text: String, bgHex: String) {
         if (text.isBlank()) return
         viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    statusUploadProgress = StatusUploadProgress(
+                        stage = UploadStage.PROCESSING,
+                        mediaType = "text",
+                        mediaLabel = "Text Status",
+                        statusMessage = "Publishing Text Status to WhatsApp…"
+                    )
+                )
+            }
             repository.uploadTextStatus(text.trim(), bgHex).onSuccess { res ->
-                _uiState.update { it.copy(snackbarMessage = res.message ?: "Text status uploaded!") }
+                _uiState.update {
+                    it.copy(
+                        statusUploadProgress = StatusUploadProgress(
+                            stage = UploadStage.COMPLETED,
+                            mediaType = "text",
+                            mediaLabel = "Text Status",
+                            statusMessage = res.message ?: "Text status uploaded!"
+                        ),
+                        snackbarMessage = res.message ?: "Text status uploaded!"
+                    )
+                }
                 loadStatuses()
+                delay(3500L)
+                _uiState.update { state ->
+                    if (state.statusUploadProgress.stage == UploadStage.COMPLETED) {
+                        state.copy(statusUploadProgress = StatusUploadProgress())
+                    } else state
+                }
             }.onFailure { err ->
-                _uiState.update { it.copy(snackbarMessage = err.message ?: "Status upload failed") }
+                _uiState.update {
+                    it.copy(
+                        statusUploadProgress = StatusUploadProgress(
+                            stage = UploadStage.FAILED,
+                            mediaType = "text",
+                            mediaLabel = "Text Status",
+                            statusMessage = err.message ?: "Status upload failed"
+                        ),
+                        snackbarMessage = err.message ?: "Status upload failed"
+                    )
+                }
             }
         }
     }
 
     fun uploadMediaStatus(type: String, uri: Uri, caption: String, fallbackMime: String) {
+        val label = when (type) {
+            "video" -> "Video Status"
+            "voice" -> "Voice Note Status"
+            else -> "Photo Status"
+        }
         viewModelScope.launch {
-            _uiState.update { it.copy(isProcessingTool = true) }
-            repository.uploadMediaStatus(type, uri, caption, fallbackMime).onSuccess { res ->
+            _uiState.update {
+                it.copy(
+                    isProcessingTool = true,
+                    statusUploadProgress = StatusUploadProgress(
+                        stage = UploadStage.PREPARING,
+                        mediaType = type,
+                        mediaLabel = label,
+                        statusMessage = "Preparing $label for upload…"
+                    )
+                )
+            }
+            repository.uploadMediaStatus(
+                type = type,
+                uri = uri,
+                caption = caption,
+                fallbackMime = fallbackMime,
+                onMetaResolved = { fileName, totalBytes ->
+                    _uiState.update { state ->
+                        state.copy(
+                            statusUploadProgress = state.statusUploadProgress.copy(
+                                stage = UploadStage.UPLOADING,
+                                fileName = fileName,
+                                totalBytes = totalBytes,
+                                statusMessage = "Uploading $label to Railway…"
+                            )
+                        )
+                    }
+                },
+                onProgress = { uploaded, total ->
+                    val reachedEnd = total > 0L && uploaded >= total
+                    _uiState.update { state ->
+                        state.copy(
+                            statusUploadProgress = state.statusUploadProgress.copy(
+                                stage = if (reachedEnd) UploadStage.PROCESSING else UploadStage.UPLOADING,
+                                bytesUploaded = uploaded,
+                                totalBytes = if (total > 0L) total else state.statusUploadProgress.totalBytes,
+                                statusMessage = if (reachedEnd) {
+                                    "Processing & publishing $label via Baileys…"
+                                } else {
+                                    "Uploading $label…"
+                                }
+                            )
+                        )
+                    }
+                }
+            ).onSuccess { res ->
                 _uiState.update {
                     it.copy(
                         isProcessingTool = false,
-                        snackbarMessage = res.message ?: "Status uploaded!"
+                        statusUploadProgress = it.statusUploadProgress.copy(
+                            stage = UploadStage.COMPLETED,
+                            bytesUploaded = it.statusUploadProgress.totalBytes.coerceAtLeast(1L),
+                            statusMessage = res.message ?: "$label uploaded!"
+                        ),
+                        snackbarMessage = res.message ?: "$label uploaded!"
                     )
                 }
                 loadStatuses()
+                delay(3500L)
+                _uiState.update { state ->
+                    if (state.statusUploadProgress.stage == UploadStage.COMPLETED) {
+                        state.copy(statusUploadProgress = StatusUploadProgress())
+                    } else state
+                }
             }.onFailure { err ->
                 _uiState.update {
                     it.copy(
                         isProcessingTool = false,
+                        statusUploadProgress = it.statusUploadProgress.copy(
+                            stage = UploadStage.FAILED,
+                            statusMessage = err.message ?: "Media status upload failed"
+                        ),
                         snackbarMessage = err.message ?: "Media status upload failed"
                     )
                 }

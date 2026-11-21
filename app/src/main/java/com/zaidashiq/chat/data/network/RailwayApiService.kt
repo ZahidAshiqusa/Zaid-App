@@ -1,6 +1,8 @@
 package com.zaidashiq.chat.data.network
 
 import com.zaidashiq.chat.data.model.*
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
 import retrofit2.http.*
 
 interface RailwayApiService {
@@ -58,6 +60,15 @@ interface RailwayApiService {
 
     @POST("api/status/upload")
     suspend fun uploadStatus(@Body request: StatusUploadRequest): GenericActionResponse
+
+    @Multipart
+    @POST("api/status/upload")
+    suspend fun uploadStatusMultipart(
+        @Part file: MultipartBody.Part,
+        @Part("caption") caption: RequestBody,
+        @Part("isVoiceNote") isVoiceNote: RequestBody,
+        @Part("privacyMode") privacyMode: RequestBody
+    ): GenericActionResponse
 
     @GET("api/vault/items")
     suspend fun getVaultItems(): VaultItemsResponse

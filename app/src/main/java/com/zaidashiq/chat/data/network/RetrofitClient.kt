@@ -18,13 +18,14 @@ object RetrofitClient {
 
     fun create(deviceId: String): RailwayApiService {
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
+            level = HttpLoggingInterceptor.Level.HEADERS
         }
 
         val okHttp = OkHttpClient.Builder()
-            .connectTimeout(25, TimeUnit.SECONDS)
-            .readTimeout(90, TimeUnit.SECONDS)
-            .writeTimeout(90, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(180, TimeUnit.SECONDS)
+            .writeTimeout(180, TimeUnit.SECONDS)
+            .callTimeout(240, TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 val reqBuilder = chain.request().newBuilder()
                     .header("X-Device-Id", deviceId)
