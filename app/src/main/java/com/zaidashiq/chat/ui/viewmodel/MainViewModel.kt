@@ -102,6 +102,8 @@ data class MainUiState(
     val isSendingMessage: Boolean = false,
     val isProcessingTool: Boolean = false,
     val toolStatusText: String? = null,
+    val activeMediaTool: ChatToolType? = null,
+    val activeMediaQuery: String = "",
     val giphyResults: List<GiphyItem> = emptyList(),
     val isSearchingGiphy: Boolean = false,
     val vaultItems: List<VaultItem> = emptyList(),
@@ -398,6 +400,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val clean = text.trim()
         if (clean.isBlank()) return
 
+        // Intercept .play <song> command -> send direct YouTube MP3 media with NO text chat!
+        if (clean.equals(".play", ignoreCase = true)) {
+            _uiState.update {
+                it.copy(snackbarMessage = "Usage: .play <song name or YouTube link>")
+            }
+            return
+        }
+        val playRegex = Regex("^\\.play\\s+(.+)$", RegexOption.IGNORE_CASE)
+        playRegex.matchEntire(clean)?.let { match ->
+            val songQuery = match.groupValues[1].trim()
+            if (songQuery.isNotBlank()) {
+                downloadAndSendMedia(
+                    recipientJid = recipientJid,
+                    tool = ChatToolType.SONG,
+                    queryOrUrl = songQuery,
+                    caption = ""
+                )
+                return
+            }
+        }
+
         val tempId = "local_${System.currentTimeMillis()}"
         val optimistic = ChatMessageItem(
             id = tempId,
@@ -450,10 +473,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        val statusLabel = when (tool) {
+            ChatToolType.SONG -> "Fetching YouTube song & sending MP3 directly…"
+            ChatToolType.VIDEO -> "Fetching YouTube video & sending MP4 directly…"
+            ChatToolType.TIKTOK -> "Downloading TikTok video & sending directly…"
+            ChatToolType.FACEBOOK -> "Downloading Facebook video & sending directly…"
+            ChatToolType.INSTAGRAM -> "Downloading Instagram media & sending directly…"
+            else -> "Downloading ${tool.title} & sending directly…"
+        }
+
         _uiState.update {
             it.copy(
                 isProcessingTool = true,
-                toolStatusText = "Downloading ${tool.title} & sending directly to WhatsApp…"
+                activeMediaTool = tool,
+                activeMediaQuery = clean,
+                toolStatusText = statusLabel
             )
         }
 
@@ -467,16 +501,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val deliveredBubble = ChatMessageItem(
                     id = res.id ?: "media_${System.currentTimeMillis()}",
                     fromMe = true,
-                    text = res.title?.ifBlank { res.message ?: tool.title } ?: tool.title,
+                    text = res.title?.ifBlank { tool.title } ?: tool.title,
                     mediaType = res.mediaType ?: tool.platformKey,
                     timestamp = System.currentTimeMillis()
                 )
                 _uiState.update {
                     it.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
+                        activeMediaQuery = "",
                         toolStatusText = null,
                         activeChatMessages = it.activeChatMessages + deliveredBubble,
-                        snackbarMessage = res.message ?: "${tool.title} sent!"
+                        snackbarMessage = res.message ?: "${tool.title} sent directly!"
                     )
                 }
                 onDone()
@@ -484,6 +520,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
+                        activeMediaQuery = "",
                         toolStatusText = null,
                         snackbarMessage = err.message ?: "Download & send failed"
                     )
@@ -496,7 +534,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 isProcessingTool = true,
-                toolStatusText = "Sending GIF directly to chat…"
+                activeMediaTool = ChatToolType.DOWNLOADER,
+                activeMediaQuery = gif.title.ifBlank { "GIF" },
+                toolStatusText = "Sending GIF directly…"
             )
         }
         viewModelScope.launch {
@@ -515,6 +555,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
+                        activeMediaQuery = "",
                         toolStatusText = null,
                         activeChatMessages = it.activeChatMessages + bubble,
                         snackbarMessage = "GIF sent!"
@@ -525,6 +567,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
+                        activeMediaQuery = "",
                         toolStatusText = null,
                         snackbarMessage = err.message ?: "Failed to send GIF"
                     )
@@ -556,7 +600,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendVideoNoteUri(recipientJid: String, uri: Uri, onDone: () -> Unit = {}) {
-        _uiState.update { it.copy(isProcessingTool = true, toolStatusText = "Uploading circular Video Note…") }
+        _uiState.update {
+            it.copy(
+                isProcessingTool = true,
+                activeMediaTool = ChatToolType.VIDEO_NOTE,
+                activeMediaQuery = "Circular Video Note",
+                toolStatusText = "Uploading circular Video Note…"
+            )
+        }
         viewModelScope.launch {
             repository.sendMediaFromUri(recipientJid, "ptv", uri, "video/mp4").onSuccess { res ->
                 val bubble = ChatMessageItem(
@@ -569,6 +620,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
+                        activeMediaQuery = "",
                         toolStatusText = null,
                         activeChatMessages = it.activeChatMessages + bubble,
                         snackbarMessage = res.message ?: "Video Note sent!"
@@ -579,6 +632,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
+                        activeMediaQuery = "",
                         toolStatusText = null,
                         snackbarMessage = err.message ?: "Failed to send Video Note"
                     )

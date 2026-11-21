@@ -4,6 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -57,7 +62,19 @@ fun ZaidAshiqChatApp(
         Box(modifier = Modifier.fillMaxSize()) {
             NavHost(
                 navController = navController,
-                startDestination = if (uiState.isLinked) HomeRoute else PairingRoute
+                startDestination = if (uiState.isLinked) HomeRoute else PairingRoute,
+                enterTransition = {
+                    slideInHorizontally(initialOffsetX = { it / 4 }, animationSpec = tween(260)) + fadeIn(tween(240))
+                },
+                exitTransition = {
+                    slideOutHorizontally(targetOffsetX = { -it / 6 }, animationSpec = tween(220)) + fadeOut(tween(180))
+                },
+                popEnterTransition = {
+                    slideInHorizontally(initialOffsetX = { -it / 5 }, animationSpec = tween(240)) + fadeIn(tween(220))
+                },
+                popExitTransition = {
+                    slideOutHorizontally(targetOffsetX = { it / 4 }, animationSpec = tween(220)) + fadeOut(tween(180))
+                }
             ) {
                 composable<PairingRoute> {
                     PairingScreen(

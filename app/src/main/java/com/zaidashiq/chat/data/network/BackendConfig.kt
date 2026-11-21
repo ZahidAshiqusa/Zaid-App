@@ -3,6 +3,7 @@ package com.zaidashiq.chat.data.network
 import com.zaidashiq.chat.BuildConfig
 
 object BackendConfig {
+    private const val DEFAULT_PRODUCTION_RAILWAY_URL = "https://zaid-app-production.up.railway.app"
     private const val PLACEHOLDER_RAILWAY = "https://your-railway-backend.up.railway.app"
     private const val PLACEHOLDER_SUPABASE = "https://your-project.supabase.co"
     private const val PLACEHOLDER_GIPHY = "your_giphy_api_key"
@@ -18,7 +19,7 @@ object BackendConfig {
                 cleaned.equals(PLACEHOLDER_RAILWAY, ignoreCase = true) ||
                 cleaned.contains("your-railway-backend", ignoreCase = true)
             ) {
-                return ""
+                return DEFAULT_PRODUCTION_RAILWAY_URL
             }
             return if (cleaned.startsWith("http://", ignoreCase = true) ||
                 cleaned.startsWith("https://", ignoreCase = true)

@@ -1,8 +1,12 @@
 package com.zaidashiq.chat.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -19,7 +23,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -31,6 +34,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zaidashiq.chat.R
 import com.zaidashiq.chat.data.network.BackendConfig
+import com.zaidashiq.chat.ui.components.AnimatedAuroraEmeraldBackground
+import com.zaidashiq.chat.ui.components.PulsingStatusDot
 import com.zaidashiq.chat.ui.theme.*
 import com.zaidashiq.chat.ui.viewmodel.MainUiState
 
@@ -43,7 +48,12 @@ fun PairingScreen(
 ) {
     var phoneInput by remember { mutableStateOf(uiState.linkedPhone) }
     var copiedFeedback by remember { mutableStateOf(false) }
+    var heroEntered by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
+
+    LaunchedEffect(Unit) {
+        heroEntered = true
+    }
 
     LaunchedEffect(uiState.isLinked) {
         if (uiState.isLinked) {
@@ -56,16 +66,12 @@ fun PairingScreen(
             .fillMaxSize()
             .background(SurfacePureWhite)
     ) {
-        // Deep Emerald Curved Hero Backdrop
-        Box(
+        // Animated Aurora Emerald Curved Hero Backdrop
+        AnimatedAuroraEmeraldBackground(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(260.dp)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(DeepEmerald, EmeraldHeader)
-                    )
-                )
+                .height(276.dp)
+                .clip(RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp))
         )
 
         Column(
@@ -86,15 +92,16 @@ fun PairingScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(42.dp)
                             .clip(CircleShape)
-                            .background(TextOnDark.copy(alpha = 0.16f)),
+                            .background(TextOnDark.copy(alpha = 0.16f))
+                            .border(1.dp, NeonMintAccent.copy(alpha = 0.35f), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.ChatBubble,
                             contentDescription = stringResource(R.string.app_name),
-                            tint = OnlineMint,
+                            tint = NeonMintAccent,
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -120,223 +127,244 @@ fun PairingScreen(
 
             Spacer(Modifier.height(22.dp))
 
-            Text(
-                text = stringResource(R.string.pairing_title),
-                style = MaterialTheme.typography.headlineLarge,
-                color = TextOnDark,
-                textAlign = TextAlign.Center
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = stringResource(R.string.pairing_subtitle),
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextOnDarkMuted,
-                textAlign = TextAlign.Center
-            )
+            AnimatedVisibility(
+                visible = heroEntered,
+                enter = fadeIn(tween(320)) + slideInVertically(
+                    initialOffsetY = { -24 },
+                    animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow)
+                )
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = stringResource(R.string.pairing_title),
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = TextOnDark,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = stringResource(R.string.pairing_subtitle),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextOnDarkMuted,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
 
             Spacer(Modifier.height(24.dp))
 
-            // Main Pairing Card
-            ElevatedCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite),
-                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp)
+            // Main Animated Pairing Card
+            AnimatedVisibility(
+                visible = heroEntered,
+                enter = fadeIn(tween(350)) + slideInVertically(
+                    initialOffsetY = { 56 },
+                    animationSpec = spring(dampingRatio = 0.76f, stiffness = Spring.StiffnessLow)
+                )
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(22.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                ElevatedCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(26.dp),
+                    colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite),
+                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 8.dp)
                 ) {
-                    // Railway Backend Status Pill
-                    val pillColor = if (uiState.backendHealthy) SoftSageTint else ErrorCoral.copy(alpha = 0.1f)
-                    val pillTextColor = if (uiState.backendHealthy) DeepEmerald else ErrorCoral
-                    Row(
+                    Column(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(pillColor)
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .fillMaxWidth()
+                            .padding(22.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Box(
+                        // Pulsing Backend Status Pill
+                        val pillColor = if (uiState.backendHealthy) SoftSageTint else ErrorCoral.copy(alpha = 0.1f)
+                        val pillTextColor = if (uiState.backendHealthy) DeepEmerald else ErrorCoral
+                        val dotColor = if (uiState.backendHealthy) OnlineMint else ErrorCoral
+                        Row(
                             modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(if (uiState.backendHealthy) OnlineMint else ErrorCoral)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = when {
-                                uiState.backendHealthy -> stringResource(R.string.service_online)
-                                !BackendConfig.isRailwayConfigured -> stringResource(R.string.service_not_available)
-                                !uiState.bannerNotice.isNullOrBlank() -> stringResource(R.string.service_not_available)
-                                else -> stringResource(R.string.service_connecting)
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = pillTextColor
-                        )
-                    }
-
-                    Spacer(Modifier.height(20.dp))
-
-                    OutlinedTextField(
-                        value = phoneInput,
-                        onValueChange = { phoneInput = it.filter { ch -> ch.isDigit() || ch == '+' || ch == ' ' } },
-                        label = { Text(stringResource(R.string.pairing_phone_label)) },
-                        placeholder = { Text(stringResource(R.string.pairing_phone_hint)) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.PhoneAndroid,
-                                contentDescription = null,
-                                tint = DeepEmerald
+                                .clip(RoundedCornerShape(50))
+                                .background(pillColor)
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            PulsingStatusDot(
+                                color = dotColor,
+                                isPulsing = uiState.backendHealthy,
+                                size = 8.dp
                             )
-                        },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("pairing_phone_input"),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = DeepEmerald,
-                            unfocusedBorderColor = DividerSubtle
-                        )
-                    )
-
-                    if (!uiState.pairingError.isNullOrBlank()) {
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            text = uiState.pairingError,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = ErrorCoral,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-
-                    Button(
-                        onClick = { onGenerateCode(phoneInput) },
-                        enabled = !uiState.isRequestingCode && phoneInput.filter { it.isDigit() }.length >= 7,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .testTag("generate_pairing_code_button"),
-                        shape = RoundedCornerShape(50),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = DeepEmerald,
-                            contentColor = TextOnDark
-                        )
-                    ) {
-                        if (uiState.isRequestingCode) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = TextOnDark,
-                                strokeWidth = 2.5.dp
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Text("Requesting Baileys Code…")
-                        } else {
-                            Icon(Icons.Rounded.QrCode2, contentDescription = null, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(6.dp))
                             Text(
-                                text = stringResource(R.string.pairing_generate_btn),
-                                style = MaterialTheme.typography.labelLarge
+                                text = when {
+                                    uiState.backendHealthy -> stringResource(R.string.service_online)
+                                    !BackendConfig.isRailwayConfigured -> stringResource(R.string.service_not_available)
+                                    !uiState.bannerNotice.isNullOrBlank() -> stringResource(R.string.service_not_available)
+                                    else -> stringResource(R.string.service_connecting)
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = pillTextColor
                             )
                         }
-                    }
 
-                    // 8-Digit Pairing Code Reveal
-                    AnimatedVisibility(
-                        visible = !uiState.pairingCode.isNullOrBlank(),
-                        enter = fadeIn() + scaleIn()
-                    ) {
-                        Column(
+                        Spacer(Modifier.height(20.dp))
+
+                        OutlinedTextField(
+                            value = phoneInput,
+                            onValueChange = { phoneInput = it.filter { ch -> ch.isDigit() || ch == '+' || ch == ' ' } },
+                            label = { Text(stringResource(R.string.pairing_phone_label)) },
+                            placeholder = { Text(stringResource(R.string.pairing_phone_hint)) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.PhoneAndroid,
+                                    contentDescription = null,
+                                    tint = DeepEmerald
+                                )
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                            shape = RoundedCornerShape(16.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 22.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = "YOUR WHATSAPP PAIRING CODE",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = TextSecondary
+                                .testTag("pairing_phone_input"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = DeepEmerald,
+                                unfocusedBorderColor = DividerSubtle
                             )
+                        )
+
+                        if (!uiState.pairingError.isNullOrBlank()) {
                             Spacer(Modifier.height(10.dp))
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(18.dp))
-                                    .background(SoftSageTint)
-                                    .border(1.5.dp, DeepEmerald, RoundedCornerShape(18.dp))
-                                    .padding(vertical = 18.dp, horizontal = 12.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = uiState.pairingCode.orEmpty(),
-                                    fontFamily = JetBrainsMonoFamily,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 32.sp,
-                                    letterSpacing = 4.sp,
-                                    color = DeepEmerald,
-                                    modifier = Modifier.testTag("pairing_code_display")
-                                )
-                            }
+                            Text(
+                                text = uiState.pairingError,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = ErrorCoral,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
 
-                            Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(16.dp))
 
-                            OutlinedButton(
-                                onClick = {
-                                    clipboard.setText(AnnotatedString(uiState.pairingCode.orEmpty().replace("-", "")))
-                                    copiedFeedback = true
-                                },
-                                shape = RoundedCornerShape(50),
-                                modifier = Modifier
-                                    .height(48.dp)
-                                    .testTag("copy_pairing_code_button")
-                            ) {
-                                Icon(
-                                    imageVector = if (copiedFeedback) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                                    contentDescription = stringResource(R.string.pairing_copy_btn),
-                                    tint = DeepEmerald,
-                                    modifier = Modifier.size(18.dp)
+                        Button(
+                            onClick = { onGenerateCode(phoneInput) },
+                            enabled = !uiState.isRequestingCode && phoneInput.filter { it.isDigit() }.length >= 7,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp)
+                                .testTag("generate_pairing_code_button"),
+                            shape = RoundedCornerShape(50),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DeepEmerald,
+                                contentColor = TextOnDark
+                            )
+                        ) {
+                            if (uiState.isRequestingCode) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = NeonMintAccent,
+                                    strokeWidth = 2.5.dp
                                 )
+                                Spacer(Modifier.width(10.dp))
+                                Text("Requesting Baileys Code…")
+                            } else {
+                                Icon(Icons.Rounded.QrCode2, contentDescription = null, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = if (copiedFeedback) stringResource(R.string.pairing_copied_toast) else stringResource(R.string.pairing_copy_btn),
-                                    color = DeepEmerald
+                                    text = stringResource(R.string.pairing_generate_btn),
+                                    style = MaterialTheme.typography.labelLarge
                                 )
                             }
+                        }
 
-                            if (uiState.isWaitingForLink) {
-                                Spacer(Modifier.height(14.dp))
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
+                        // 8-Digit Pairing Code Reveal
+                        AnimatedVisibility(
+                            visible = !uiState.pairingCode.isNullOrBlank(),
+                            enter = fadeIn() + scaleIn(
+                                initialScale = 0.88f,
+                                animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMedium)
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 22.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "YOUR WHATSAPP PAIRING CODE",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = TextSecondary
+                                )
+                                Spacer(Modifier.height(10.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .background(SoftSageTint)
+                                        .border(1.5.dp, DeepEmerald, RoundedCornerShape(18.dp))
+                                        .padding(vertical = 18.dp, horizontal = 12.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        color = WhatsAppGreen,
-                                        strokeWidth = 2.dp
+                                    Text(
+                                        text = uiState.pairingCode.orEmpty(),
+                                        fontFamily = JetBrainsMonoFamily,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 32.sp,
+                                        letterSpacing = 4.sp,
+                                        color = DeepEmerald,
+                                        modifier = Modifier.testTag("pairing_code_display")
+                                    )
+                                }
+
+                                Spacer(Modifier.height(12.dp))
+
+                                OutlinedButton(
+                                    onClick = {
+                                        clipboard.setText(AnnotatedString(uiState.pairingCode.orEmpty().replace("-", "")))
+                                        copiedFeedback = true
+                                    },
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier
+                                        .height(48.dp)
+                                        .testTag("copy_pairing_code_button")
+                                ) {
+                                    Icon(
+                                        imageVector = if (copiedFeedback) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                                        contentDescription = stringResource(R.string.pairing_copy_btn),
+                                        tint = DeepEmerald,
+                                        modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     Text(
-                                        text = stringResource(R.string.pairing_waiting_status),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = DeepEmerald,
-                                        fontWeight = FontWeight.SemiBold
+                                        text = if (copiedFeedback) stringResource(R.string.pairing_copied_toast) else stringResource(R.string.pairing_copy_btn),
+                                        color = DeepEmerald
                                     )
                                 }
-                            }
 
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                text = stringResource(R.string.pairing_instructions),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary,
-                                textAlign = TextAlign.Center
-                            )
+                                if (uiState.isWaitingForLink) {
+                                    Spacer(Modifier.height(14.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            color = WhatsAppGreen,
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = stringResource(R.string.pairing_waiting_status),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = DeepEmerald,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    text = stringResource(R.string.pairing_instructions),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextSecondary,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
                 }
@@ -344,7 +372,6 @@ fun PairingScreen(
 
             Spacer(Modifier.height(18.dp))
 
-            // Quick open Messenger button so user can also inspect the UI / offline state anytime
             TextButton(
                 onClick = onContinueToHome,
                 modifier = Modifier

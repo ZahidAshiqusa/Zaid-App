@@ -4,6 +4,20 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +37,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -35,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zaidashiq.chat.R
 import com.zaidashiq.chat.data.model.*
+import com.zaidashiq.chat.ui.components.AnimatedAuroraEmeraldBackground
 import com.zaidashiq.chat.ui.theme.*
 import com.zaidashiq.chat.ui.viewmodel.HomeTab
 import com.zaidashiq.chat.ui.viewmodel.MainUiState
@@ -121,7 +137,11 @@ fun HomeScreen(
     Scaffold(
         containerColor = SurfacePureWhite,
         floatingActionButton = {
-            if (uiState.selectedTab == HomeTab.CHATS || uiState.selectedTab == HomeTab.GROUPS) {
+            AnimatedVisibility(
+                visible = uiState.selectedTab == HomeTab.CHATS || uiState.selectedTab == HomeTab.GROUPS,
+                enter = scaleIn(spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessMedium)) + fadeIn(),
+                exit = scaleOut() + fadeOut()
+            ) {
                 FloatingActionButton(
                     onClick = { showNewChatDialog = true },
                     containerColor = WhatsAppGreen,
@@ -144,15 +164,20 @@ fun HomeScreen(
                 .fillMaxSize()
                 .padding(bottom = innerPadding.calculateBottomPadding())
         ) {
-            // Deep Emerald Header + 5 Icon Tabs matching Screen 1 of attached mockup
-            Column(
+            // Animated Aurora-Emerald Header + 5 Icon Tabs
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(listOf(DeepEmerald, EmeraldHeader))
-                    )
-                    .statusBarsPadding()
+                    .clip(RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
             ) {
+                AnimatedAuroraEmeraldBackground(
+                    modifier = Modifier.matchParentSize()
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                ) {
                 // Top Action Bar: Camera | Title/Search | Search + 3-dot Menu
                 if (uiState.isSearchActive) {
                     Row(
@@ -352,6 +377,7 @@ fun HomeScreen(
                     )
                 }
             }
+            }
 
             // Connection Banner when backend isn't reachable or not paired yet
             if (!uiState.bannerNotice.isNullOrBlank() || !uiState.isLinked) {
@@ -401,13 +427,25 @@ fun HomeScreen(
                 }
             }
 
-            // Tab Body Content
-            Box(
+            // Smooth Animated Tab Body Content
+            AnimatedContent(
+                targetState = uiState.selectedTab,
+                transitionSpec = {
+                    val forward = targetState.ordinal >= initialState.ordinal
+                    (slideInHorizontally(
+                        initialOffsetX = { if (forward) it / 5 else -it / 5 },
+                        animationSpec = tween(220)
+                    ) + fadeIn(tween(200))) togetherWith (slideOutHorizontally(
+                        targetOffsetX = { if (forward) -it / 5 else it / 5 },
+                        animationSpec = tween(180)
+                    ) + fadeOut(tween(150)))
+                },
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(SurfacePureWhite)
-            ) {
-                when (uiState.selectedTab) {
+                    .background(SurfacePureWhite),
+                label = "home_tab_content"
+            ) { currentTab ->
+                when (currentTab) {
                     HomeTab.CHATS -> ChatsTabBody(
                         chats = filteredChats,
                         isLoading = uiState.isRefreshingHome,
@@ -494,10 +532,26 @@ private fun HomeTabButton(
     badgeCount: Int = 0,
     onClick: () -> Unit
 ) {
+    val iconScale by animateFloatAsState(
+        targetValue = if (selected) 1.08f else 0.96f,
+        animationSpec = spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMedium),
+        label = "tab_scale_${tab.name}"
+    )
+    val circleBg by animateColorAsState(
+        targetValue = if (selected) SurfacePureWhite else TextOnDark.copy(alpha = 0.14f),
+        animationSpec = tween(220),
+        label = "tab_bg_${tab.name}"
+    )
+    val iconTint by animateColorAsState(
+        targetValue = if (selected) DeepEmerald else TextOnDark,
+        animationSpec = tween(220),
+        label = "tab_tint_${tab.name}"
+    )
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 6.dp, vertical = 4.dp)
             .testTag("home_tab_${tab.name.lowercase()}")
@@ -505,15 +559,16 @@ private fun HomeTabButton(
         Box(contentAlignment = Alignment.TopEnd) {
             Box(
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(42.dp)
+                    .scale(iconScale)
                     .clip(CircleShape)
-                    .background(if (selected) SurfacePureWhite else TextOnDark.copy(alpha = 0.14f)),
+                    .background(circleBg),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = tab.label,
-                    tint = if (selected) DeepEmerald else TextOnDark,
+                    tint = iconTint,
                     modifier = Modifier.size(21.dp)
                 )
             }
@@ -544,6 +599,14 @@ private fun HomeTabButton(
             color = if (selected) TextOnDark else TextOnDarkMuted,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1
+        )
+        Spacer(Modifier.height(3.dp))
+        Box(
+            modifier = Modifier
+                .width(if (selected) 16.dp else 0.dp)
+                .height(2.5.dp)
+                .clip(RoundedCornerShape(50))
+                .background(NeonMintAccent)
         )
     }
 }
@@ -623,7 +686,7 @@ private fun ChatListRow(
         ContactAvatar(
             name = chat.resolvedName,
             isGroup = chat.isGroup,
-            showOnlineDot = !chat.isGroup && chat.unreadCount > 0,
+            showOnlineDot = false,
             size = 52.dp
         )
         Spacer(Modifier.width(14.dp))
@@ -1018,7 +1081,7 @@ private fun ChannelsTabBody(
                             .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        ContactAvatar(name = ch.name, isGroup = true, showOnlineDot = ch.active, size = 46.dp)
+                        ContactAvatar(name = ch.name, isGroup = true, showOnlineDot = false, size = 46.dp)
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(ch.name, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
@@ -1039,7 +1102,7 @@ private fun ChannelsTabBody(
 fun ContactAvatar(
     name: String,
     isGroup: Boolean,
-    showOnlineDot: Boolean,
+    showOnlineDot: Boolean = false,
     size: androidx.compose.ui.unit.Dp
 ) {
     val palette = listOf(
@@ -1058,38 +1121,27 @@ fun ContactAvatar(
         .joinToString("") { it.first().uppercase() }
         .ifBlank { "?" }
 
-    Box(contentAlignment = Alignment.BottomEnd) {
-        Box(
-            modifier = Modifier
-                .size(size)
-                .clip(CircleShape)
-                .background(bgColor.copy(alpha = 0.16f))
-                .border(1.dp, bgColor.copy(alpha = 0.35f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            if (isGroup) {
-                Icon(
-                    imageVector = Icons.Rounded.Groups,
-                    contentDescription = null,
-                    tint = bgColor,
-                    modifier = Modifier.size(size * 0.52f)
-                )
-            } else {
-                Text(
-                    text = initials,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = bgColor,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-        if (showOnlineDot) {
-            Box(
-                modifier = Modifier
-                    .size(13.dp)
-                    .clip(CircleShape)
-                    .background(OnlineMint)
-                    .border(2.dp, SurfacePureWhite, CircleShape)
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(bgColor.copy(alpha = 0.16f))
+            .border(1.dp, bgColor.copy(alpha = 0.35f), CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isGroup) {
+            Icon(
+                imageVector = Icons.Rounded.Groups,
+                contentDescription = null,
+                tint = bgColor,
+                modifier = Modifier.size(size * 0.52f)
+            )
+        } else {
+            Text(
+                text = initials,
+                style = MaterialTheme.typography.titleMedium,
+                color = bgColor,
+                fontWeight = FontWeight.Bold
             )
         }
     }

@@ -212,7 +212,7 @@ class BaileysManager {
             },
             msgRetryCounterCache,
             generateHighQualityLinkPreview: false,
-            markOnlineOnConnect: true,
+            markOnlineOnConnect: false,
             syncFullHistory: false,
             connectTimeoutMs: 45000,
             defaultQueryTimeoutMs: 45000,
@@ -291,8 +291,11 @@ class BaileysManager {
                 entry.connected = true;
                 entry.pending = false;
                 entry.reconnecting = false;
-                console.log(`[baileys] WhatsApp session +${cleanNumber} connected!`);
+                console.log(`[baileys] WhatsApp session +${cleanNumber} connected in stealth mode (no online/last-seen presence).`);
                 try {
+                    if (typeof sock.sendPresenceUpdate === 'function') {
+                        await sock.sendPresenceUpdate('unavailable').catch(() => {});
+                    }
                     await saveCreds();
                     await store.backupSessionDirToPostgres(cleanNumber, sessionDir);
                 } catch (_) {}

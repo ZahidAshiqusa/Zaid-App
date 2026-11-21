@@ -273,15 +273,18 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
         const yt = await resolveYoutubeInfo(cleanQuery);
         const stream = await fetchYoutubeStreamUrl(yt.url, 'video');
         const { buffer } = await downloadBufferFromUrl(stream.url, stream.headers);
+        const videoPayload = {
+            video: buffer,
+            mimetype: 'video/mp4'
+        };
+        if (cleanCaption) {
+            videoPayload.caption = cleanCaption;
+        }
         return {
             platform: 'video',
             mediaType: 'video',
             title: yt.title,
-            baileysPayload: {
-                video: buffer,
-                mimetype: 'video/mp4',
-                caption: cleanCaption || yt.title
-            }
+            baileysPayload: videoPayload
         };
     }
 

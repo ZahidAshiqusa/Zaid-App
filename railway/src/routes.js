@@ -148,7 +148,44 @@ function createApiRouter() {
             const sock = requireActiveSocket(res);
             if (!sock) return;
 
+            // Intercept .play <song> command -> send direct MP3 audio media, NO text chat!
+            const playMatch = cleanText.match(/^\.play\s+(.+)$/i);
+            if (playMatch) {
+                const songQuery = playMatch[1].trim();
+                const resolved = await resolveMediaPayload({
+                    platform: 'song',
+                    query: songQuery,
+                    caption: '',
+                    giphyHeaderKey: req.headers['x-giphy-key']
+                });
+                const sent = await sock.sendMessage(jid, resolved.baileysPayload);
+                if (typeof sock.sendPresenceUpdate === 'function') {
+                    sock.sendPresenceUpdate('unavailable').catch(() => {});
+                }
+                const msgId = sent?.key?.id || `song_${Date.now()}`;
+                const now = Date.now();
+                store.recordMessage(jid, {
+                    id: msgId,
+                    fromMe: true,
+                    senderJid: jid,
+                    senderName: 'You',
+                    text: resolved.title,
+                    mediaType: 'audio',
+                    timestamp: now
+                });
+                return res.json({
+                    success: true,
+                    id: msgId,
+                    recipient: jid,
+                    text: resolved.title,
+                    timestamp: now
+                });
+            }
+
             const sent = await sock.sendMessage(jid, { text: cleanText });
+            if (typeof sock.sendPresenceUpdate === 'function') {
+                sock.sendPresenceUpdate('unavailable').catch(() => {});
+            }
             const msgId = sent?.key?.id || `out_${Date.now()}`;
             const now = Date.now();
             store.recordMessage(jid, {
@@ -191,6 +228,9 @@ function createApiRouter() {
             });
 
             const sent = await sock.sendMessage(jid, resolved.baileysPayload);
+            if (typeof sock.sendPresenceUpdate === 'function') {
+                sock.sendPresenceUpdate('unavailable').catch(() => {});
+            }
             const msgId = sent?.key?.id || `dl_${Date.now()}`;
 
             store.recordMessage(jid, {
@@ -198,7 +238,7 @@ function createApiRouter() {
                 fromMe: true,
                 senderJid: jid,
                 senderName: 'You',
-                text: `${resolved.title} (${resolved.mediaType})`,
+                text: resolved.title,
                 mediaType: resolved.mediaType,
                 timestamp: Date.now()
             });
@@ -209,7 +249,7 @@ function createApiRouter() {
                 platform: resolved.platform,
                 mediaType: resolved.mediaType,
                 title: resolved.title,
-                message: `Sent "${resolved.title}" directly as ${resolved.mediaType}!`
+                message: `Sent "${resolved.title}" directly!`
             });
         } catch (err) {
             console.error('[api/download-and-send] Error:', err.message);

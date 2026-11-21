@@ -36,6 +36,7 @@ import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.zaidashiq.chat.data.model.GiphyItem
 import com.zaidashiq.chat.data.network.BackendConfig
+import com.zaidashiq.chat.ui.components.MediaSendingLoadingCard
 import com.zaidashiq.chat.ui.theme.*
 import com.zaidashiq.chat.ui.viewmodel.ChatToolType
 import kotlinx.coroutines.delay
@@ -46,6 +47,8 @@ import java.io.File
 fun MediaDownloadSheet(
     tool: ChatToolType,
     isBusy: Boolean,
+    activeQuery: String = "",
+    statusText: String? = null,
     giphyResults: List<GiphyItem>,
     isSearchingGiphy: Boolean,
     onDismiss: () -> Unit,
@@ -236,7 +239,16 @@ fun MediaDownloadSheet(
                     )
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(14.dp))
+
+                if (isBusy) {
+                    MediaSendingLoadingCard(
+                        tool = tool,
+                        query = activeQuery.ifBlank { inputQuery },
+                        statusText = statusText
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
 
                 Button(
                     onClick = { onSubmit(inputQuery, caption) },
@@ -249,9 +261,9 @@ fun MediaDownloadSheet(
                     colors = ButtonDefaults.buttonColors(containerColor = FloatingMenuTeal)
                 ) {
                     if (isBusy) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = TextOnDark, strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = NeonMintAccent, strokeWidth = 2.dp)
                         Spacer(Modifier.width(10.dp))
-                        Text("Fetching & Sending Media…")
+                        Text("Downloading & Sending Direct Media…")
                     } else {
                         Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
