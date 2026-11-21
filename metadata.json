@@ -1,0 +1,8 @@
+{
+  "name": "Zaid Ashiq Chat",
+  "description": "Native Android WhatsApp Messenger powered by a standalone Railway Baileys backend with 8-digit pairing, media download-and-send tools (Song, Video, TikTok, Facebook, Instagram, Downloader), Voice/Video Notes, Fake Location, Interactive Button Messages, and Anti-Delete Vault.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

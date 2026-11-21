@@ -1,0 +1,18 @@
+# Android & Gradle
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+captures/
+.cxx/
+
+# Environment Secrets (NEVER commit .env)
+.env
+railway/.env
+railway/node_modules/
+railway/session/
+railway/tmp/
+railway/data/sessions/
+railway/data/vault/

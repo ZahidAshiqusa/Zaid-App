@@ -1,0 +1,19 @@
+{
+  "BOT_NAME": "Zaid Ashiq X Ultra V. Coder",
+  "BOT_OWNER": "Zaid Ashiq X Ultra V. Coder",
+  "AUTOREAD": "true",
+  "AUTOTYPE": "false",
+  "AUTORECORD": "false",
+  "AUTORECORDTYPE": "false",
+  "AUTO_STATUS_REACT": "true",
+  "AUTO_STATUS_REPLY": "true",
+  "AUTO_STATUS_MSG": "Viewed By Zaid Ashiq X Ultra V. Coder",
+  "ANTICALL": "true",
+  "BUTTONMODE": "true",
+  "LANGUAGE": "en",
+  "PREFIX": ".",
+  "ALWAYSONLINE": "false",
+  "AUTO_REAUTH_ENABLED": "true",
+  "STATUS_UPLOADER_ENABLED": "true",
+  "STATUS_VOICE_NOTE_ENABLED": "true"
+}

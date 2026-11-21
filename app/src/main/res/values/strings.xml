@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Zaid Ashiq Chat</string>
+
+    <!-- Pairing Screen -->
+    <string name="pairing_title">Link Your WhatsApp</string>
+    <string name="pairing_subtitle">Enter your WhatsApp number with country code to generate an 8-digit Baileys pairing code.</string>
+    <string name="pairing_phone_label">WhatsApp Phone Number</string>
+    <string name="pairing_phone_hint">e.g. 923001234567</string>
+    <string name="pairing_generate_btn">Generate Pairing Code</string>
+    <string name="pairing_copy_btn">Copy Code</string>
+    <string name="pairing_copied_toast">Pairing code copied</string>
+    <string name="pairing_waiting_status">Waiting for WhatsApp confirmation…</string>
+    <string name="pairing_instructions">Open WhatsApp → Linked Devices → Link a Device → Link with phone number instead, then enter the code above.</string>
+    <string name="pairing_continue_demo">Preview App Offline</string>
+
+    <!-- Main Tabs -->
+    <string name="tab_chats">CHATS</string>
+    <string name="tab_status">STATUS</string>
+    <string name="tab_calls">CALLS</string>
+    <string name="tab_groups">GROUPS</string>
+    <string name="tab_channels">CHANNELS</string>
+
+    <!-- Top Actions & Overflow Menu -->
+    <string name="action_camera">Camera</string>
+    <string name="action_search">Search</string>
+    <string name="action_more_options">More options</string>
+    <string name="action_new_chat">New chat</string>
+    <string name="menu_vault">Anti-Delete &amp; View-Once Vault</string>
+    <string name="menu_auto_status">Auto-Status View &amp; React</string>
+    <string name="menu_full_pp">Full Profile Picture Tool</string>
+    <string name="menu_channel_react">Channel Auto-React Rules</string>
+    <string name="menu_connection_settings">Session &amp; Connection</string>
+
+    <!-- Chat Screen & + Power Menu -->
+    <string name="chat_input_placeholder">Type a message…</string>
+    <string name="chat_online">online</string>
+    <string name="tool_video_note">Video Note</string>
+    <string name="tool_voice_note">Voice Note</string>
+    <string name="tool_fake_location">Fake Location</string>
+    <string name="tool_button_messages">Button Messages</string>
+    <string name="tool_song">Song</string>
+    <string name="tool_video">Video</string>
+    <string name="tool_tiktok">TikTok</string>
+    <string name="tool_facebook">Facebook</string>
+    <string name="tool_instagram">Instagram</string>
+    <string name="tool_downloader">Downloader</string>
+
+    <!-- New Button Message Screen -->
+    <string name="button_composer_back">Back</string>
+    <string name="button_composer_title">New Button Message</string>
+    <string name="button_composer_field_label">Title/Message</string>
+    <string name="button_composer_field_hint">Define a message and add interactive buttons:</string>
+    <string name="button_composer_add">Add Button</string>
+    <string name="button_composer_send">Send</string>
+</resources>
