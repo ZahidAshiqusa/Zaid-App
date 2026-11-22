@@ -1,10 +1,13 @@
 package com.zaidashiq.chat.ui.screens
 
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,14 +24,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.zaidashiq.chat.data.model.AutoReactConfigPayload
 import com.zaidashiq.chat.data.model.VaultSettingsPayload
 import com.zaidashiq.chat.data.network.BackendConfig
+import com.zaidashiq.chat.ui.components.AnimatedAuroraEmeraldBackground
 import com.zaidashiq.chat.ui.theme.*
 import com.zaidashiq.chat.ui.viewmodel.MainUiState
 
@@ -41,18 +48,32 @@ private fun ToolScaffold(
     content: @Composable (PaddingValues) -> Unit
 ) {
     Scaffold(
-        containerColor = SurfaceSubtleGray,
+        containerColor = ObsidianBase,
         topBar = {
-            TopAppBar(
-                title = { Text(title, color = TextOnDark, style = MaterialTheme.typography.titleLarge) },
-                navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("tool_back_button")) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = TextOnDark)
-                    }
-                },
-                actions = actions,
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepEmerald)
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
+            ) {
+                AnimatedAuroraEmeraldBackground(modifier = Modifier.matchParentSize())
+                TopAppBar(
+                    title = {
+                        Text(
+                            title,
+                            color = TextOnDark,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack, modifier = Modifier.testTag("tool_back_button")) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = NeonMintAccent)
+                        }
+                    },
+                    actions = actions,
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+                )
+            }
         },
         content = content
     )
@@ -74,11 +95,11 @@ fun VaultScreen(
         onBack = onBack,
         actions = {
             IconButton(onClick = onRefresh) {
-                Icon(Icons.Rounded.Refresh, contentDescription = "Refresh vault", tint = TextOnDark)
+                Icon(Icons.Rounded.Refresh, contentDescription = "Refresh vault", tint = NeonMintAccent)
             }
             if (uiState.vaultItems.isNotEmpty()) {
                 IconButton(onClick = onClearVault) {
-                    Icon(Icons.Rounded.DeleteSweep, contentDescription = "Clear vault", tint = TextOnDark)
+                    Icon(Icons.Rounded.DeleteSweep, contentDescription = "Clear vault", tint = ErrorCoral)
                 }
             }
         }
@@ -91,12 +112,13 @@ fun VaultScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                ElevatedCard(
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite)
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = GlassCardSurface,
+                    border = BorderStroke(1.dp, GlassBorderEmerald.copy(alpha = 0.65f))
                 ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Protection Toggles", style = MaterialTheme.typography.titleMedium, color = DeepEmerald)
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Protection Toggles", style = MaterialTheme.typography.titleMedium, color = NeonMintAccent, fontWeight = FontWeight.Bold)
                         ToggleRow(
                             title = "Anti-Delete Message Recovery",
                             subtitle = "Save messages deleted by senders",
@@ -129,7 +151,7 @@ fun VaultScreen(
                 Text(
                     text = "Recovered Items (${uiState.vaultItems.size})",
                     style = MaterialTheme.typography.titleSmall,
-                    color = TextSecondary
+                    color = TextOnDarkMuted
                 )
             }
 
@@ -145,9 +167,10 @@ fun VaultScreen(
                 }
             } else {
                 items(uiState.vaultItems, key = { it.id }) { item ->
-                    ElevatedCard(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite)
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = GlassCardSurface,
+                        border = BorderStroke(0.8.dp, GlassBorder)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -157,7 +180,8 @@ fun VaultScreen(
                                 Text(
                                     text = item.senderName.ifBlank { "+${item.senderNumber}" },
                                     style = MaterialTheme.typography.titleSmall,
-                                    color = DeepEmerald
+                                    color = NeonMintAccent,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                                 Spacer(Modifier.height(2.dp))
                                 Text(
@@ -172,7 +196,7 @@ fun VaultScreen(
                                 )
                             }
                             IconButton(onClick = { onForwardItem(item.id) }) {
-                                Icon(Icons.AutoMirrored.Rounded.ForwardToInbox, contentDescription = "Forward to DM", tint = DeepEmerald)
+                                Icon(Icons.AutoMirrored.Rounded.ForwardToInbox, contentDescription = "Forward to DM", tint = NeonMintAccent)
                             }
                         }
                     }
@@ -207,11 +231,12 @@ fun AutoStatusScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            ElevatedCard(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite)
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = GlassCardSurface,
+                border = BorderStroke(1.dp, GlassBorderEmerald.copy(alpha = 0.65f))
             ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     ToggleRow("Master Auto-Status Engine", "Run automatically on Railway 24/7", enabled) { enabled = it }
                     ToggleRow("Auto-View Statuses", "Silently mark contacts' statuses as viewed", autoView) { autoView = it }
                     ToggleRow("Auto-React on Statuses", "Send an instant reaction emoji", autoReact) { autoReact = it }
@@ -222,6 +247,7 @@ fun AutoStatusScreen(
                         onValueChange = { emoji = it },
                         label = { Text("Reaction Emoji") },
                         singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -229,10 +255,11 @@ fun AutoStatusScreen(
                         onValueChange = { replyText = it },
                         label = { Text("Auto-Reply Message") },
                         singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(4.dp))
                     Button(
                         onClick = {
                             onSave(
@@ -248,9 +275,12 @@ fun AutoStatusScreen(
                         },
                         modifier = Modifier.fillMaxWidth().height(52.dp).testTag("save_auto_status_button"),
                         shape = RoundedCornerShape(50),
-                        colors = ButtonDefaults.buttonColors(containerColor = DeepEmerald)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = EmeraldGlow,
+                            contentColor = ObsidianBase
+                        )
                     ) {
-                        Text("Save Auto-Status Settings")
+                        Text("Save Auto-Status Settings", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -264,17 +294,32 @@ fun FullProfilePicScreen(
     onBack: () -> Unit,
     onApply: (targetType: String, groupJid: String, uri: Uri) -> Unit
 ) {
+    val context = LocalContext.current
     var targetType by remember { mutableStateOf("personal") }
     var selectedGroupJid by remember { mutableStateOf("") }
     var pickedUri by remember { mutableStateOf<Uri?>(null) }
+    var pickedResolution by remember { mutableStateOf<String?>(null) }
 
     val photoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        if (uri != null) pickedUri = uri
+        if (uri != null) {
+            pickedUri = uri
+            pickedResolution = try {
+                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, opts)
+                }
+                if (opts.outWidth > 0 && opts.outHeight > 0) {
+                    "${opts.outWidth} × ${opts.outHeight} px • 100% Same Aspect (.fdp)"
+                } else null
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
 
-    ToolScaffold(title = "Full Profile Picture Tool", onBack = onBack) { padding ->
+    ToolScaffold(title = "Full DP (.fdp 100% Uncropped)", onBack = onBack) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -284,17 +329,30 @@ fun FullProfilePicScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            ElevatedCard(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite),
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = GlassCardSurface,
+                border = BorderStroke(1.dp, GlassBorderEmerald.copy(alpha = 0.65f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
                     modifier = Modifier.padding(18.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("No-Crop Full HD WhatsApp DP", style = MaterialTheme.typography.titleMedium, color = DeepEmerald)
-                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = "100% Same-Resolution Full DP (.fdp)",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = NeonMintAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Applies your exact full picture directly via WhatsApp's w:profile:picture IQ protocol — zero square cropping and zero side bars.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(12.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         FilterChip(
@@ -318,6 +376,7 @@ fun FullProfilePicScreen(
                             onValueChange = { selectedGroupJid = it },
                             label = { Text("Target Group JID (e.g. 12345@g.us)") },
                             singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -326,15 +385,17 @@ fun FullProfilePicScreen(
 
                     Box(
                         modifier = Modifier
-                            .size(180.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(SoftSageTint),
+                            .fillMaxWidth()
+                            .height(220.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(ObsidianSurface)
+                            .border(1.dp, GlassBorderEmerald.copy(alpha = 0.55f), RoundedCornerShape(18.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         if (pickedUri != null) {
                             AsyncImage(
                                 model = pickedUri,
-                                contentDescription = "Selected profile picture",
+                                contentDescription = "Selected full resolution profile picture",
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize()
                             )
@@ -342,8 +403,25 @@ fun FullProfilePicScreen(
                             Icon(
                                 imageVector = Icons.Rounded.AddPhotoAlternate,
                                 contentDescription = null,
-                                tint = DeepEmerald,
+                                tint = NeonMintAccent,
                                 modifier = Modifier.size(54.dp)
+                            )
+                        }
+                    }
+
+                    if (!pickedResolution.isNullOrBlank()) {
+                        Spacer(Modifier.height(10.dp))
+                        Surface(
+                            color = SoftSagePill,
+                            shape = RoundedCornerShape(50),
+                            border = BorderStroke(1.dp, NeonMintAccent.copy(alpha = 0.35f))
+                        ) {
+                            Text(
+                                text = pickedResolution.orEmpty(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NeonMintAccent,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                             )
                         }
                     }
@@ -354,12 +432,13 @@ fun FullProfilePicScreen(
                         onClick = {
                             photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         },
+                        border = BorderStroke(1.dp, GlassBorderEmerald),
                         shape = RoundedCornerShape(50),
                         modifier = Modifier.fillMaxWidth().height(48.dp).testTag("full_pp_pick_button")
                     ) {
-                        Icon(Icons.Rounded.PhotoLibrary, contentDescription = null, tint = DeepEmerald)
+                        Icon(Icons.Rounded.PhotoLibrary, contentDescription = null, tint = NeonMintAccent)
                         Spacer(Modifier.width(8.dp))
-                        Text("Pick Photo (Photo Picker)", color = DeepEmerald)
+                        Text("Pick Photo (Original Resolution)", color = NeonMintAccent)
                     }
 
                     Spacer(Modifier.height(10.dp))
@@ -371,14 +450,19 @@ fun FullProfilePicScreen(
                         enabled = pickedUri != null && !uiState.isProcessingTool,
                         shape = RoundedCornerShape(50),
                         modifier = Modifier.fillMaxWidth().height(52.dp).testTag("full_pp_apply_button"),
-                        colors = ButtonDefaults.buttonColors(containerColor = DeepEmerald)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = EmeraldGlow,
+                            contentColor = ObsidianBase,
+                            disabledContainerColor = GlassCardElevated,
+                            disabledContentColor = TextSecondary
+                        )
                     ) {
                         if (uiState.isProcessingTool) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = TextOnDark, strokeWidth = 2.dp)
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = ObsidianBase, strokeWidth = 2.dp)
                             Spacer(Modifier.width(8.dp))
-                            Text("Applying Full DP…")
+                            Text("Applying Full .fdp…", fontWeight = FontWeight.Bold)
                         } else {
-                            Text("Apply Full Profile Picture")
+                            Text("Set 100% Full Uncropped DP", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -408,17 +492,24 @@ fun ChannelReactScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                ElevatedCard(
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite)
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = GlassCardSurface,
+                    border = BorderStroke(1.dp, GlassBorderEmerald.copy(alpha = 0.65f))
                 ) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Add New Channel Rule", style = MaterialTheme.typography.titleMedium, color = DeepEmerald)
+                        Text("Instant Fast Channel Auto-React", style = MaterialTheme.typography.titleMedium, color = NeonMintAccent, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "Paste any WhatsApp Channel invite link (whatsapp.com/channel/...) or @newsletter JID. Auto-follows and reacts instantaneously to every new post.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
                         OutlinedTextField(
                             value = channelUrl,
                             onValueChange = { channelUrl = it },
                             label = { Text("Channel Invite URL or Newsletter JID") },
                             singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.fillMaxWidth().testTag("channel_rule_url_input")
                         )
                         OutlinedTextField(
@@ -426,6 +517,7 @@ fun ChannelReactScreen(
                             onValueChange = { channelName = it },
                             label = { Text("Channel Label (optional)") },
                             singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
                         OutlinedTextField(
@@ -433,6 +525,7 @@ fun ChannelReactScreen(
                             onValueChange = { emojis = it },
                             label = { Text("Reaction Emojis (space separated)") },
                             singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
                         Button(
@@ -446,26 +539,30 @@ fun ChannelReactScreen(
                             enabled = channelUrl.isNotBlank(),
                             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("channel_rule_add_button"),
                             shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(containerColor = DeepEmerald)
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = EmeraldGlow,
+                                contentColor = ObsidianBase
+                            )
                         ) {
-                            Text("Save Channel Auto-React Rule")
+                            Text("Save Channel Auto-React Rule", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
 
             items(uiState.channels, key = { it.id.ifBlank { it.jid } }) { rule ->
-                ElevatedCard(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite)
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = GlassCardSurface,
+                    border = BorderStroke(0.8.dp, GlassBorder)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text(rule.name, style = MaterialTheme.typography.titleSmall, color = TextPrimary)
-                            Text(rule.emojis.joinToString(" "), style = MaterialTheme.typography.bodyMedium)
+                            Text(rule.name, style = MaterialTheme.typography.titleSmall, color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                            Text(rule.emojis.joinToString(" "), style = MaterialTheme.typography.bodyMedium, color = NeonMintAccent)
                         }
                         IconButton(onClick = { onDeleteRule(rule.id) }) {
                             Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete rule", tint = ErrorCoral)
@@ -494,12 +591,13 @@ fun ConnectionSettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            ElevatedCard(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite)
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = GlassCardSurface,
+                border = BorderStroke(1.dp, GlassBorderEmerald.copy(alpha = 0.65f))
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Railway Baileys Bridge", style = MaterialTheme.typography.titleMedium, color = DeepEmerald)
+                    Text("Railway Baileys Bridge", style = MaterialTheme.typography.titleMedium, color = NeonMintAccent, fontWeight = FontWeight.Bold)
 
                     StatusInfoRow(
                         label = "Backend Service",
@@ -541,18 +639,22 @@ fun ConnectionSettingsScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(
                             onClick = onRefreshStatus,
+                            border = BorderStroke(1.dp, GlassBorderEmerald),
                             modifier = Modifier.weight(1f).height(48.dp),
                             shape = RoundedCornerShape(50)
                         ) {
-                            Text("Test Bridge", color = DeepEmerald)
+                            Text("Test Bridge", color = NeonMintAccent)
                         }
                         Button(
                             onClick = onTriggerCloudSync,
                             modifier = Modifier.weight(1f).height(48.dp),
                             shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(containerColor = DeepEmerald)
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = EmeraldGlow,
+                                contentColor = ObsidianBase
+                            )
                         ) {
-                            Text("Sync Cloud")
+                            Text("Sync Cloud", fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -560,11 +662,15 @@ fun ConnectionSettingsScreen(
                         onClick = onRelinkPhone,
                         modifier = Modifier.fillMaxWidth().height(48.dp).testTag("relink_whatsapp_button"),
                         shape = RoundedCornerShape(50),
-                        colors = ButtonDefaults.buttonColors(containerColor = FloatingMenuTeal)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SoftSagePill,
+                            contentColor = NeonMintAccent
+                        ),
+                        border = BorderStroke(1.dp, GlassBorderEmerald)
                     ) {
                         Icon(Icons.Rounded.QrCode2, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Pair / Switch WhatsApp Number")
+                        Text("Pair / Switch WhatsApp Number", fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -584,13 +690,20 @@ private fun ToggleRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, color = TextPrimary)
+            Text(title, style = MaterialTheme.typography.titleSmall, color = TextPrimary, fontWeight = FontWeight.Medium)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
         }
+        Spacer(Modifier.width(10.dp))
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(checkedThumbColor = SurfacePureWhite, checkedTrackColor = WhatsAppGreen)
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = ObsidianBase,
+                checkedTrackColor = EmeraldGlow,
+                uncheckedThumbColor = TextSecondary,
+                uncheckedTrackColor = GlassCardElevated,
+                uncheckedBorderColor = GlassBorder
+            )
         )
     }
 }
@@ -604,8 +717,9 @@ private fun StatusInfoRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(SurfaceSubtleGray)
+            .clip(RoundedCornerShape(14.dp))
+            .background(ObsidianSurface)
+            .border(0.8.dp, GlassBorder, RoundedCornerShape(14.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

@@ -39,6 +39,23 @@ enum class ChatToolType(val title: String, val platformKey: String, val hint: St
     DOWNLOADER("Downloader", "downloader", "Paste any media link or search GIFs via Giphy")
 }
 
+private val SONG_LINK_REGEX = Regex(
+    "^https?://(?:" +
+        "(?:www\\.|m\\.|music\\.)?youtube\\.com/(?:watch\\?[^\\s]*v=[\\w-]+|shorts/[\\w-]+|live/[\\w-]+)[^\\s]*|" +
+        "youtu\\.be/[\\w-]+[^\\s]*|" +
+        "open\\.spotify\\.com/track/[\\w-]+[^\\s]*|" +
+        "spotify\\.link/[\\w-]+[^\\s]*|" +
+        "(?:www\\.|m\\.|on\\.)?soundcloud\\.com/[^\\s]+|" +
+        "[^\\s]+\\.(?:mp3|m4a|aac|ogg|opus|wav)(?:\\?[^\\s]*)?" +
+        ")$",
+    RegexOption.IGNORE_CASE
+)
+
+fun isDirectSongLink(input: String): Boolean {
+    val clean = input.trim()
+    return clean.isNotEmpty() && SONG_LINK_REGEX.matches(clean)
+}
+
 enum class UploadStage {
     IDLE,
     PREPARING,
@@ -98,7 +115,9 @@ data class MainUiState(
     val capturedStatuses: List<CapturedStatusItem> = emptyList(),
     val statusUploadProgress: StatusUploadProgress = StatusUploadProgress(),
     val activeChatMessages: List<ChatMessageItem> = emptyList(),
+    val activeChatLastSeen: String = "",
     val isLoadingChat: Boolean = false,
+    val isLoadingOlderChats: Boolean = false,
     val isSendingMessage: Boolean = false,
     val isProcessingTool: Boolean = false,
     val toolStatusText: String? = null,
@@ -106,6 +125,9 @@ data class MainUiState(
     val activeMediaQuery: String = "",
     val giphyResults: List<GiphyItem> = emptyList(),
     val isSearchingGiphy: Boolean = false,
+    val isLookingUpNumber: Boolean = false,
+    val numberLookupResult: NumberLookupResponse? = null,
+    val numberLookupError: String? = null,
     val vaultItems: List<VaultItem> = emptyList(),
     val vaultSettings: VaultSettingsPayload = VaultSettingsPayload(),
     val autoReactConfig: AutoReactConfigPayload = AutoReactConfigPayload(),
@@ -370,7 +392,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startChatPolling(recipientPhoneOrJid: String) {
         activeChatPollJob?.cancel()
         val key = recipientPhoneOrJid.substringBefore("@")
-        _uiState.update { it.copy(isLoadingChat = true, activeChatMessages = emptyList()) }
+        _uiState.update {
+            it.copy(
+                isLoadingChat = true,
+                activeChatMessages = emptyList(),
+                activeChatLastSeen = ""
+            )
+        }
+        if (!recipientPhoneOrJid.endsWith("@g.us")) {
+            viewModelScope.launch {
+                repository.getChatPresence(recipientPhoneOrJid).onSuccess { pres ->
+                    if (pres.lastSeenFormatted.isNotBlank()) {
+                        _uiState.update { it.copy(activeChatLastSeen = pres.lastSeenFormatted) }
+                    }
+                }
+            }
+        }
         activeChatPollJob = viewModelScope.launch {
             while (isActive) {
                 repository.getChatMessages(key).onSuccess { res ->
@@ -380,6 +417,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val merged = res.messages + pendingLocal.filterNot { it.id in serverIds }
                         state.copy(
                             activeChatMessages = merged,
+                            activeChatLastSeen = res.lastSeenFormatted.ifBlank { state.activeChatLastSeen },
                             isLoadingChat = false
                         )
                     }
@@ -394,20 +432,133 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopChatPolling() {
         activeChatPollJob?.cancel()
         activeChatPollJob = null
+        _uiState.update { it.copy(activeChatLastSeen = "") }
+    }
+
+    fun loadOlderMessages(recipientJid: String) {
+        if (_uiState.value.isLoadingOlderChats) return
+        val oldest = _uiState.value.activeChatMessages.firstOrNull()
+        _uiState.update { it.copy(isLoadingOlderChats = true) }
+        viewModelScope.launch {
+            repository.loadOlderChats(
+                jid = recipientJid,
+                oldestMsgId = oldest?.id.orEmpty(),
+                oldestTimestamp = oldest?.timestamp ?: 0L,
+                fromMe = oldest?.fromMe ?: false
+            ).onSuccess { res ->
+                val key = recipientJid.substringBefore("@")
+                repository.getChatMessages(key).onSuccess { viewRes ->
+                    _uiState.update { state ->
+                        state.copy(
+                            activeChatMessages = viewRes.messages,
+                            activeChatLastSeen = viewRes.lastSeenFormatted.ifBlank { state.activeChatLastSeen },
+                            isLoadingOlderChats = false,
+                            snackbarMessage = res.message ?: "Checked for older messages"
+                        )
+                    }
+                }.onFailure {
+                    _uiState.update {
+                        it.copy(
+                            isLoadingOlderChats = false,
+                            snackbarMessage = res.message ?: "Older history synced"
+                        )
+                    }
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        isLoadingOlderChats = false,
+                        snackbarMessage = err.message ?: "Could not load older messages"
+                    )
+                }
+            }
+        }
+    }
+
+    fun loadOlderChatsList() {
+        if (_uiState.value.isLoadingOlderChats) return
+        _uiState.update { it.copy(isLoadingOlderChats = true, isRefreshingHome = true) }
+        viewModelScope.launch {
+            repository.loadOlderChats().onSuccess { res ->
+                loadAllHomeData()
+                _uiState.update {
+                    it.copy(
+                        isLoadingOlderChats = false,
+                        snackbarMessage = res.message ?: "Synced older chats from WhatsApp"
+                    )
+                }
+            }.onFailure { err ->
+                loadChats()
+                _uiState.update {
+                    it.copy(
+                        isLoadingOlderChats = false,
+                        snackbarMessage = err.message ?: "Failed syncing older chats"
+                    )
+                }
+            }
+        }
+    }
+
+    fun lookupNumberDetails(phoneOrJid: String) {
+        val clean = phoneOrJid.substringBefore("@").filter { it.isDigit() }
+        if (clean.length < 7) {
+            _uiState.update {
+                it.copy(
+                    isLookingUpNumber = false,
+                    numberLookupError = "Enter a valid phone number or CNIC (at least 7 digits)."
+                )
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(
+                isLookingUpNumber = true,
+                numberLookupError = null,
+                numberLookupResult = null
+            )
+        }
+        viewModelScope.launch {
+            repository.lookupNumber(clean).onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        isLookingUpNumber = false,
+                        numberLookupResult = res,
+                        numberLookupError = if (!res.success) res.error ?: "No details found." else null
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        isLookingUpNumber = false,
+                        numberLookupError = err.message ?: "Number lookup failed."
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearNumberLookup() {
+        _uiState.update {
+            it.copy(
+                isLookingUpNumber = false,
+                numberLookupResult = null,
+                numberLookupError = null
+            )
+        }
     }
 
     fun sendTextMessage(recipientJid: String, text: String) {
         val clean = text.trim()
         if (clean.isBlank()) return
 
-        // Intercept .play <song> command -> send direct YouTube MP3 media with NO text chat!
-        if (clean.equals(".play", ignoreCase = true)) {
+        // Intercept .play / .song / .video commands -> download & send direct media + buttons in chat!
+        if (clean.equals(".play", ignoreCase = true) || clean.equals(".song", ignoreCase = true)) {
             _uiState.update {
-                it.copy(snackbarMessage = "Usage: .play <song name or YouTube link>")
+                it.copy(snackbarMessage = "Usage: .play <song name or link> — or paste a song link directly!")
             }
             return
         }
-        val playRegex = Regex("^\\.play\\s+(.+)$", RegexOption.IGNORE_CASE)
+        val playRegex = Regex("^\\.(?:play|song)\\s+(.+)$", RegexOption.IGNORE_CASE)
         playRegex.matchEntire(clean)?.let { match ->
             val songQuery = match.groupValues[1].trim()
             if (songQuery.isNotBlank()) {
@@ -420,6 +571,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
         }
+        val videoRegex = Regex("^\\.video\\s+(.+)$", RegexOption.IGNORE_CASE)
+        videoRegex.matchEntire(clean)?.let { match ->
+            val videoQuery = match.groupValues[1].trim()
+            if (videoQuery.isNotBlank()) {
+                downloadAndSendMedia(
+                    recipientJid = recipientJid,
+                    tool = ChatToolType.VIDEO,
+                    queryOrUrl = videoQuery,
+                    caption = ""
+                )
+                return
+            }
+        }
+
+        // Auto-detect pasted Song Link directly in chat (YouTube, YT Music, Spotify, SoundCloud, direct MP3/M4A/OGG)
+        if (isDirectSongLink(clean)) {
+            downloadAndSendMedia(
+                recipientJid = recipientJid,
+                tool = ChatToolType.SONG,
+                queryOrUrl = clean,
+                caption = ""
+            )
+            return
+        }
 
         val tempId = "local_${System.currentTimeMillis()}"
         val optimistic = ChatMessageItem(
@@ -428,6 +603,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             text = clean,
             mediaType = "text",
             timestamp = System.currentTimeMillis(),
+            status = 1,
             pending = true
         )
 
@@ -444,7 +620,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     state.copy(
                         isSendingMessage = false,
                         activeChatMessages = state.activeChatMessages.map { msg ->
-                            if (msg.id == tempId) msg.copy(id = res.id ?: tempId, pending = false) else msg
+                            if (msg.id == tempId) {
+                                msg.copy(
+                                    id = res.id ?: tempId,
+                                    status = res.status.coerceAtLeast(2),
+                                    pending = false
+                                )
+                            } else msg
                         }
                     )
                 }
@@ -473,56 +655,76 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val statusLabel = when (tool) {
-            ChatToolType.SONG -> "Fetching YouTube song & sending MP3 directly…"
-            ChatToolType.VIDEO -> "Fetching YouTube video & sending MP4 directly…"
-            ChatToolType.TIKTOK -> "Downloading TikTok video & sending directly…"
-            ChatToolType.FACEBOOK -> "Downloading Facebook video & sending directly…"
-            ChatToolType.INSTAGRAM -> "Downloading Instagram media & sending directly…"
-            else -> "Downloading ${tool.title} & sending directly…"
+        val tempId = "pending_media_${System.currentTimeMillis()}"
+        val processingLabel = when (tool) {
+            ChatToolType.SONG -> "Processing Song: $clean"
+            ChatToolType.VIDEO -> "Processing Video: $clean"
+            ChatToolType.TIKTOK -> "Processing TikTok Video…"
+            ChatToolType.FACEBOOK -> "Processing Facebook Video…"
+            ChatToolType.INSTAGRAM -> "Processing Instagram Media…"
+            else -> "Processing ${tool.title}…"
         }
+
+        val pendingBubble = ChatMessageItem(
+            id = tempId,
+            fromMe = true,
+            text = processingLabel,
+            mediaType = tool.platformKey,
+            timestamp = System.currentTimeMillis(),
+            status = 1,
+            pending = true
+        )
 
         _uiState.update {
             it.copy(
                 isProcessingTool = true,
                 activeMediaTool = tool,
                 activeMediaQuery = clean,
-                toolStatusText = statusLabel
+                toolStatusText = processingLabel,
+                activeChatMessages = it.activeChatMessages + pendingBubble
             )
         }
+        onDone()
 
         viewModelScope.launch {
             repository.downloadAndSend(
                 recipient = recipientJid,
                 platform = tool.platformKey,
                 query = clean,
-                caption = caption
+                caption = caption,
+                withButtons = true
             ).onSuccess { res ->
                 val deliveredBubble = ChatMessageItem(
                     id = res.id ?: "media_${System.currentTimeMillis()}",
                     fromMe = true,
                     text = res.title?.ifBlank { tool.title } ?: tool.title,
                     mediaType = res.mediaType ?: tool.platformKey,
-                    timestamp = System.currentTimeMillis()
+                    buttons = res.buttons,
+                    status = res.status.coerceAtLeast(2),
+                    timestamp = System.currentTimeMillis(),
+                    pending = false
                 )
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    val replaced = state.activeChatMessages.map { msg ->
+                        if (msg.id == tempId) deliveredBubble else msg
+                    }
+                    state.copy(
                         isProcessingTool = false,
                         activeMediaTool = null,
                         activeMediaQuery = "",
                         toolStatusText = null,
-                        activeChatMessages = it.activeChatMessages + deliveredBubble,
+                        activeChatMessages = if (replaced.any { it.id == deliveredBubble.id }) replaced else replaced + deliveredBubble,
                         snackbarMessage = res.message ?: "${tool.title} sent directly!"
                     )
                 }
-                onDone()
             }.onFailure { err ->
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
                         activeMediaTool = null,
                         activeMediaQuery = "",
                         toolStatusText = null,
+                        activeChatMessages = state.activeChatMessages.filterNot { it.id == tempId },
                         snackbarMessage = err.message ?: "Download & send failed"
                     )
                 }
@@ -531,14 +733,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendGiphyGif(recipientJid: String, gif: GiphyItem, onDone: () -> Unit = {}) {
+        val tempId = "pending_gif_${System.currentTimeMillis()}"
+        val pendingBubble = ChatMessageItem(
+            id = tempId,
+            fromMe = true,
+            text = "Processing GIF…",
+            mediaType = "gif",
+            timestamp = System.currentTimeMillis(),
+            status = 1,
+            pending = true
+        )
         _uiState.update {
             it.copy(
                 isProcessingTool = true,
                 activeMediaTool = ChatToolType.DOWNLOADER,
                 activeMediaQuery = gif.title.ifBlank { "GIF" },
-                toolStatusText = "Sending GIF directly…"
+                toolStatusText = "Processing GIF…",
+                activeChatMessages = it.activeChatMessages + pendingBubble
             )
         }
+        onDone()
+
         viewModelScope.launch {
             repository.downloadAndSend(
                 recipient = recipientJid,
@@ -550,26 +765,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     fromMe = true,
                     text = gif.title.ifBlank { "GIF" },
                     mediaType = "gif",
-                    timestamp = System.currentTimeMillis()
+                    status = res.status.coerceAtLeast(2),
+                    timestamp = System.currentTimeMillis(),
+                    pending = false
                 )
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
                         activeMediaTool = null,
                         activeMediaQuery = "",
                         toolStatusText = null,
-                        activeChatMessages = it.activeChatMessages + bubble,
+                        activeChatMessages = state.activeChatMessages.map { if (it.id == tempId) bubble else it },
                         snackbarMessage = "GIF sent!"
                     )
                 }
-                onDone()
             }.onFailure { err ->
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
                         activeMediaTool = null,
                         activeMediaQuery = "",
                         toolStatusText = null,
+                        activeChatMessages = state.activeChatMessages.filterNot { it.id == tempId },
                         snackbarMessage = err.message ?: "Failed to send GIF"
                     )
                 }
@@ -600,14 +817,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendVideoNoteUri(recipientJid: String, uri: Uri, onDone: () -> Unit = {}) {
+        val tempId = "pending_ptv_${System.currentTimeMillis()}"
+        val pendingBubble = ChatMessageItem(
+            id = tempId,
+            fromMe = true,
+            text = "Processing Video Note…",
+            mediaType = "ptv",
+            timestamp = System.currentTimeMillis(),
+            status = 1,
+            pending = true
+        )
         _uiState.update {
             it.copy(
                 isProcessingTool = true,
                 activeMediaTool = ChatToolType.VIDEO_NOTE,
                 activeMediaQuery = "Circular Video Note",
-                toolStatusText = "Uploading circular Video Note…"
+                toolStatusText = "Processing Video Note…",
+                activeChatMessages = it.activeChatMessages + pendingBubble
             )
         }
+        onDone()
+
         viewModelScope.launch {
             repository.sendMediaFromUri(recipientJid, "ptv", uri, "video/mp4").onSuccess { res ->
                 val bubble = ChatMessageItem(
@@ -615,26 +845,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     fromMe = true,
                     text = "Video Note",
                     mediaType = "ptv",
-                    timestamp = System.currentTimeMillis()
+                    status = 2,
+                    timestamp = System.currentTimeMillis(),
+                    pending = false
                 )
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
                         activeMediaTool = null,
                         activeMediaQuery = "",
                         toolStatusText = null,
-                        activeChatMessages = it.activeChatMessages + bubble,
+                        activeChatMessages = state.activeChatMessages.map { if (it.id == tempId) bubble else it },
                         snackbarMessage = res.message ?: "Video Note sent!"
                     )
                 }
-                onDone()
             }.onFailure { err ->
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
                         activeMediaTool = null,
                         activeMediaQuery = "",
                         toolStatusText = null,
+                        activeChatMessages = state.activeChatMessages.filterNot { it.id == tempId },
                         snackbarMessage = err.message ?: "Failed to send Video Note"
                     )
                 }
@@ -643,30 +875,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendVoiceNoteUri(recipientJid: String, uri: Uri, onDone: () -> Unit = {}) {
-        _uiState.update { it.copy(isProcessingTool = true, toolStatusText = "Uploading Voice Note…") }
+        val tempId = "pending_ptt_${System.currentTimeMillis()}"
+        val pendingBubble = ChatMessageItem(
+            id = tempId,
+            fromMe = true,
+            text = "Processing Voice Note…",
+            mediaType = "voice",
+            timestamp = System.currentTimeMillis(),
+            status = 1,
+            pending = true
+        )
+        _uiState.update {
+            it.copy(
+                isProcessingTool = true,
+                activeMediaTool = ChatToolType.VOICE_NOTE,
+                toolStatusText = "Processing Voice Note…",
+                activeChatMessages = it.activeChatMessages + pendingBubble
+            )
+        }
+        onDone()
+
         viewModelScope.launch {
             repository.sendMediaFromUri(recipientJid, "voice", uri, "audio/ogg; codecs=opus").onSuccess { res ->
                 val bubble = ChatMessageItem(
                     id = "ptt_${System.currentTimeMillis()}",
                     fromMe = true,
                     text = "Voice Note",
-                    mediaType = "audio",
-                    timestamp = System.currentTimeMillis()
+                    mediaType = "voice",
+                    status = 2,
+                    timestamp = System.currentTimeMillis(),
+                    pending = false
                 )
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
                         toolStatusText = null,
-                        activeChatMessages = it.activeChatMessages + bubble,
+                        activeChatMessages = state.activeChatMessages.map { if (it.id == tempId) bubble else it },
                         snackbarMessage = res.message ?: "Voice Note sent!"
                     )
                 }
-                onDone()
             }.onFailure { err ->
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
                         toolStatusText = null,
+                        activeChatMessages = state.activeChatMessages.filterNot { it.id == tempId },
                         snackbarMessage = err.message ?: "Failed to send Voice Note"
                     )
                 }
@@ -675,32 +930,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendRecordedVoiceFile(recipientJid: String, file: File, onDone: () -> Unit = {}) {
-        _uiState.update { it.copy(isProcessingTool = true, toolStatusText = "Sending recorded Voice Note…") }
+        val tempId = "pending_rec_${System.currentTimeMillis()}"
+        val pendingBubble = ChatMessageItem(
+            id = tempId,
+            fromMe = true,
+            text = "Processing Voice Note…",
+            mediaType = "voice",
+            timestamp = System.currentTimeMillis(),
+            status = 1,
+            pending = true
+        )
+        _uiState.update {
+            it.copy(
+                isProcessingTool = true,
+                activeMediaTool = ChatToolType.VOICE_NOTE,
+                toolStatusText = "Processing Voice Note…",
+                activeChatMessages = it.activeChatMessages + pendingBubble
+            )
+        }
+        onDone()
+
         viewModelScope.launch {
             repository.sendVoiceFile(recipientJid, file).onSuccess { res ->
                 val bubble = ChatMessageItem(
                     id = "ptt_${System.currentTimeMillis()}",
                     fromMe = true,
                     text = "Voice Note",
-                    mediaType = "audio",
-                    timestamp = System.currentTimeMillis()
+                    mediaType = "voice",
+                    status = 2,
+                    timestamp = System.currentTimeMillis(),
+                    pending = false
                 )
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
                         toolStatusText = null,
-                        activeChatMessages = it.activeChatMessages + bubble,
+                        activeChatMessages = state.activeChatMessages.map { if (it.id == tempId) bubble else it },
                         snackbarMessage = res.message ?: "Voice Note sent!"
                     )
                 }
                 file.delete()
-                onDone()
             }.onFailure { err ->
                 file.delete()
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
                         toolStatusText = null,
+                        activeChatMessages = state.activeChatMessages.filterNot { it.id == tempId },
                         snackbarMessage = err.message ?: "Failed to send Voice Note"
                     )
                 }
@@ -716,7 +994,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         label: String,
         onDone: () -> Unit = {}
     ) {
-        _uiState.update { it.copy(isProcessingTool = true, toolStatusText = "Sending Fake Location…") }
+        val tempId = "pending_loc_${System.currentTimeMillis()}"
+        val pendingBubble = ChatMessageItem(
+            id = tempId,
+            fromMe = true,
+            text = "Processing Fake Location ($label)…",
+            mediaType = "location",
+            timestamp = System.currentTimeMillis(),
+            status = 1,
+            pending = true
+        )
+        _uiState.update {
+            it.copy(
+                isProcessingTool = true,
+                activeMediaTool = ChatToolType.FAKE_LOCATION,
+                toolStatusText = "Processing Fake Location…",
+                activeChatMessages = it.activeChatMessages + pendingBubble
+            )
+        }
+        onDone()
+
         viewModelScope.launch {
             repository.sendFakeLocation(recipientJid, latitude, longitude, durationSeconds).onSuccess { res ->
                 val bubble = ChatMessageItem(
@@ -724,22 +1021,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     fromMe = true,
                     text = "Location: $label (${String.format("%.4f", latitude)}, ${String.format("%.4f", longitude)})",
                     mediaType = "location",
-                    timestamp = System.currentTimeMillis()
+                    status = 2,
+                    timestamp = System.currentTimeMillis(),
+                    pending = false
                 )
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
                         toolStatusText = null,
-                        activeChatMessages = it.activeChatMessages + bubble,
+                        activeChatMessages = state.activeChatMessages.map { if (it.id == tempId) bubble else it },
                         snackbarMessage = res.message ?: "Fake Location sent!"
                     )
                 }
-                onDone()
             }.onFailure { err ->
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    state.copy(
                         isProcessingTool = false,
+                        activeMediaTool = null,
                         toolStatusText = null,
+                        activeChatMessages = state.activeChatMessages.filterNot { it.id == tempId },
                         snackbarMessage = err.message ?: "Failed to send Fake Location"
                     )
                 }

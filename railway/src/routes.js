@@ -6,10 +6,11 @@ const config = require('./config');
 const store = require('./store');
 const { baileysManager, toWhatsAppJid } = require('./baileysManager');
 const { searchGiphy, resolveMediaPayload } = require('./mediaDownloader');
+const { lookupNumberDetails } = require('./numberLookup');
 
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 100 * 1024 * 1024 } // 100 MB max for video/voice status uploads
+    limits: { fileSize: 100 * 1024 * 1024 }
 });
 
 function requireActiveSocket(res) {
@@ -61,7 +62,26 @@ function createApiRouter() {
         }
     });
 
-    // ── Contacts, Chats, Groups, Channels, Calls ─────────────────────────
+    // ── Truecaller + SIM Database + WhatsApp Number Details Lookup ───────
+    router.get('/lookup/number', async (req, res) => {
+        try {
+            const number = String(req.query.number || '').trim();
+            if (!number) {
+                return res.status(400).json({ success: false, error: 'Phone number is required.' });
+            }
+            const sock = baileysManager.getActiveSocket();
+            const details = await lookupNumberDetails(number, sock, store);
+            res.json(details);
+        } catch (err) {
+            console.error('[api/lookup/number] Error:', err.message);
+            res.status(400).json({
+                success: false,
+                error: err.message || 'Number lookup failed.'
+            });
+        }
+    });
+
+    // ── Contacts, Chats, Older History, Presence Last Seen, Groups, Channels, Calls
     router.get('/contacts', (req, res) => {
         const contacts = store.getContactsList();
         res.json({
@@ -80,19 +100,60 @@ function createApiRouter() {
         });
     });
 
-    router.get('/chats/view', (req, res) => {
+    router.get('/chats/view', async (req, res) => {
         const number = String(req.query.number || '').trim();
         if (!number) {
             return res.status(400).json({ success: false, error: 'Missing number parameter.' });
+        }
+        const jid = toWhatsAppJid(number);
+        if (jid && !jid.endsWith('@g.us')) {
+            baileysManager.subscribeLastSeen(jid).catch(() => {});
         }
         const data = store.getChatMessages(number);
         res.json({
             success: true,
             cleanNumber: data.cleanNumber,
             contactName: data.contactName,
+            lastSeen: data.lastSeen,
+            lastSeenFormatted: data.lastSeenFormatted,
             totalMessages: data.messages.length,
             messages: data.messages
         });
+    });
+
+    router.get('/chats/presence', async (req, res) => {
+        const raw = String(req.query.jid || req.query.number || '').trim();
+        const jid = toWhatsAppJid(raw);
+        if (!jid) {
+            return res.status(400).json({ success: false, error: 'Invalid JID or phone number.' });
+        }
+        const info = await baileysManager.subscribeLastSeen(jid);
+        res.json({
+            success: true,
+            jid,
+            lastSeen: info.lastSeen,
+            lastSeenFormatted: info.lastSeenFormatted
+        });
+    });
+
+    router.post('/chats/load-older', async (req, res) => {
+        try {
+            const { jid = '', oldestMsgId = '', oldestTimestamp = 0, fromMe = false } = req.body || {};
+            const resolvedJid = jid ? toWhatsAppJid(jid) : '';
+            const result = await baileysManager.fetchOlderMessages(
+                resolvedJid,
+                oldestMsgId,
+                oldestTimestamp,
+                fromMe
+            );
+            res.json({
+                success: true,
+                fetched: result.fetched,
+                message: result.message
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: err.message || 'Failed loading older chats.' });
+        }
     });
 
     router.get('/chats/groups', async (req, res) => {
@@ -148,36 +209,41 @@ function createApiRouter() {
             const sock = requireActiveSocket(res);
             if (!sock) return;
 
-            // Intercept .play <song> command -> send direct MP3 audio media, NO text chat!
-            const playMatch = cleanText.match(/^\.play\s+(.+)$/i);
-            if (playMatch) {
-                const songQuery = playMatch[1].trim();
+            // Intercept .play / .song / .video OR pasted song link -> direct MP3/MP4 + buttons (NO text chat!)
+            const playMatch = cleanText.match(/^\.(?:play|song)\s+(.+)$/i);
+            const videoMatch = cleanText.match(/^\.video\s+(.+)$/i);
+            const isPastedSongLink = /^https?:\/\/(?:(?:www\.|m\.|music\.)?youtube\.com\/(?:watch\?[^\s]*v=[\w-]+|shorts\/[\w-]+|live\/[\w-]+)[^\s]*|youtu\.be\/[\w-]+[^\s]*|open\.spotify\.com\/track\/[\w-]+[^\s]*|spotify\.link\/[\w-]+[^\s]*|(?:www\.|m\.|on\.)?soundcloud\.com\/[^\s]+|[^\s]+\.(?:mp3|m4a|aac|ogg|opus|wav)(?:\?[^\s]*)?)$/i.test(cleanText);
+
+            if (playMatch || videoMatch || isPastedSongLink) {
+                const targetPlatform = videoMatch ? 'video' : 'song';
+                const targetQuery = videoMatch
+                    ? videoMatch[1].trim()
+                    : (playMatch ? playMatch[1].trim() : cleanText);
                 const resolved = await resolveMediaPayload({
-                    platform: 'song',
-                    query: songQuery,
+                    platform: targetPlatform,
+                    query: targetQuery,
                     caption: '',
                     giphyHeaderKey: req.headers['x-giphy-key']
                 });
-                const sent = await sock.sendMessage(jid, resolved.baileysPayload);
-                if (typeof sock.sendPresenceUpdate === 'function') {
-                    sock.sendPresenceUpdate('unavailable').catch(() => {});
-                }
-                const msgId = sent?.key?.id || `song_${Date.now()}`;
+                const delivered = await baileysManager.sendMediaWithButtons(sock, jid, resolved, true);
                 const now = Date.now();
                 store.recordMessage(jid, {
-                    id: msgId,
+                    id: delivered.id,
                     fromMe: true,
                     senderJid: jid,
                     senderName: 'You',
                     text: resolved.title,
-                    mediaType: 'audio',
+                    mediaType: resolved.mediaType || (videoMatch ? 'video' : 'audio'),
+                    buttons: delivered.buttons,
+                    status: 2, // Single tick until receiver device ACKs delivery
                     timestamp: now
                 });
                 return res.json({
                     success: true,
-                    id: msgId,
+                    id: delivered.id,
                     recipient: jid,
                     text: resolved.title,
+                    status: 2,
                     timestamp: now
                 });
             }
@@ -195,6 +261,7 @@ function createApiRouter() {
                 senderName: 'You',
                 text: cleanText,
                 mediaType: 'text',
+                status: 2, // Single tick until receiver comes online & device ACKs
                 timestamp: now
             });
 
@@ -203,6 +270,7 @@ function createApiRouter() {
                 id: msgId,
                 recipient: jid,
                 text: cleanText,
+                status: 2,
                 timestamp: now
             });
         } catch (err) {
@@ -212,7 +280,7 @@ function createApiRouter() {
 
     router.post('/chat/download-and-send', async (req, res) => {
         try {
-            const { recipient, platform = 'downloader', query, caption = '' } = req.body || {};
+            const { recipient, platform = 'downloader', query, caption = '', withButtons = true } = req.body || {};
             const jid = toWhatsAppJid(recipient);
             if (!jid || !String(query || '').trim()) {
                 return res.status(400).json({ success: false, error: 'Recipient and media link/query are required.' });
@@ -227,28 +295,33 @@ function createApiRouter() {
                 giphyHeaderKey: req.headers['x-giphy-key']
             });
 
-            const sent = await sock.sendMessage(jid, resolved.baileysPayload);
-            if (typeof sock.sendPresenceUpdate === 'function') {
-                sock.sendPresenceUpdate('unavailable').catch(() => {});
-            }
-            const msgId = sent?.key?.id || `dl_${Date.now()}`;
+            const delivered = await baileysManager.sendMediaWithButtons(
+                sock,
+                jid,
+                resolved,
+                Boolean(withButtons)
+            );
 
             store.recordMessage(jid, {
-                id: msgId,
+                id: delivered.id,
                 fromMe: true,
                 senderJid: jid,
                 senderName: 'You',
                 text: resolved.title,
                 mediaType: resolved.mediaType,
+                buttons: delivered.buttons,
+                status: 2,
                 timestamp: Date.now()
             });
 
             res.json({
                 success: true,
-                id: msgId,
+                id: delivered.id,
                 platform: resolved.platform,
                 mediaType: resolved.mediaType,
                 title: resolved.title,
+                buttons: delivered.buttons,
+                status: 2,
                 message: `Sent "${resolved.title}" directly!`
             });
         } catch (err) {
@@ -283,35 +356,39 @@ function createApiRouter() {
             const cleanType = String(type || 'voice').toLowerCase();
 
             if (cleanType === 'ptv') {
-                await sock.sendMessage(jid, {
+                const sent = await sock.sendMessage(jid, {
                     video: buffer,
                     mimetype: mimetype || 'video/mp4',
                     ptv: true
                 });
+                if (typeof sock.sendPresenceUpdate === 'function') sock.sendPresenceUpdate('unavailable').catch(() => {});
                 store.recordMessage(jid, {
-                    id: `ptv_${Date.now()}`,
+                    id: sent?.key?.id || `ptv_${Date.now()}`,
                     fromMe: true,
                     senderJid: jid,
                     senderName: 'You',
                     text: 'Video Note',
                     mediaType: 'ptv',
+                    status: 2,
                     timestamp: Date.now()
                 });
                 return res.json({ success: true, simulated: false, message: 'Circular video note sent!' });
             }
 
-            await sock.sendMessage(jid, {
+            const sent = await sock.sendMessage(jid, {
                 audio: buffer,
                 mimetype: mimetype || 'audio/mp4',
                 ptt: true
             });
+            if (typeof sock.sendPresenceUpdate === 'function') sock.sendPresenceUpdate('unavailable').catch(() => {});
             store.recordMessage(jid, {
-                id: `ptt_${Date.now()}`,
+                id: sent?.key?.id || `ptt_${Date.now()}`,
                 fromMe: true,
                 senderJid: jid,
                 senderName: 'You',
                 text: 'Voice Note',
                 mediaType: 'voice',
+                status: 2,
                 timestamp: Date.now()
             });
             res.json({ success: true, simulated: false, message: 'Voice note sent!' });
@@ -330,15 +407,16 @@ function createApiRouter() {
             const sock = requireActiveSocket(res);
             if (!sock) return;
 
-            await sock.sendMessage(jid, {
+            const sent = await sock.sendMessage(jid, {
                 location: {
                     degreesLatitude: latitude,
                     degreesLongitude: longitude,
                     name: `Live Location (${Math.round(durationSeconds / 60)}m)`
                 }
             });
+            if (typeof sock.sendPresenceUpdate === 'function') sock.sendPresenceUpdate('unavailable').catch(() => {});
 
-            const trackingId = `loc_${Date.now()}`;
+            const trackingId = sent?.key?.id || `loc_${Date.now()}`;
             store.recordMessage(jid, {
                 id: trackingId,
                 fromMe: true,
@@ -346,6 +424,7 @@ function createApiRouter() {
                 senderName: 'You',
                 text: `Location: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
                 mediaType: 'location',
+                status: 2,
                 timestamp: Date.now()
             });
 
@@ -378,6 +457,7 @@ function createApiRouter() {
                 text: String(body || title).trim(),
                 mediaType: 'buttons',
                 buttons: (Array.isArray(buttons) ? buttons : []).map(b => String(b.text || '')).filter(Boolean),
+                status: 2,
                 timestamp: Date.now()
             });
 
@@ -392,7 +472,7 @@ function createApiRouter() {
         }
     });
 
-    // ── Status Feed & Status Uploader (JSON + Multipart Streaming) ───────
+    // ── Status Feed & Status Uploader ────────────────────────────────────
     router.get('/status/captured', (req, res) => {
         res.json({
             success: true,
@@ -415,6 +495,7 @@ function createApiRouter() {
             await sock.sendMessage(selfJid, {
                 text: `Saved Status from ${item.senderName} (+${item.senderNumber}):\n${item.caption || `[${item.mediaType}]`}`
             });
+            if (typeof sock.sendPresenceUpdate === 'function') sock.sendPresenceUpdate('unavailable').catch(() => {});
             res.json({ success: true, message: 'Status forwarded to your Saved Messages!' });
         } catch (err) {
             res.status(500).json({ success: false, error: err.message });
@@ -435,7 +516,6 @@ function createApiRouter() {
                 if (!statusJidList.includes(selfJid)) statusJidList.push(selfJid);
             }
 
-            // Multipart upload (Video / Voice / Image from Android ProgressRequestBody)
             if (req.file) {
                 const caption = String(req.body?.caption || '').trim();
                 const isVoiceNote = String(req.body?.isVoiceNote || 'false').toLowerCase() === 'true';
@@ -448,6 +528,7 @@ function createApiRouter() {
                         { audio: buf, mimetype: mime.includes('audio') ? mime : 'audio/ogg; codecs=opus', ptt: true },
                         { statusJidList, backgroundColor: '#075E54' }
                     );
+                    if (typeof sock.sendPresenceUpdate === 'function') sock.sendPresenceUpdate('unavailable').catch(() => {});
                     return res.json({ success: true, message: 'Voice status posted to WhatsApp!' });
                 }
 
@@ -457,6 +538,7 @@ function createApiRouter() {
                         { video: buf, mimetype: mime, caption },
                         { statusJidList }
                     );
+                    if (typeof sock.sendPresenceUpdate === 'function') sock.sendPresenceUpdate('unavailable').catch(() => {});
                     return res.json({ success: true, message: 'Video status posted to WhatsApp!' });
                 }
 
@@ -465,10 +547,10 @@ function createApiRouter() {
                     { image: buf, mimetype: mime, caption },
                     { statusJidList }
                 );
+                if (typeof sock.sendPresenceUpdate === 'function') sock.sendPresenceUpdate('unavailable').catch(() => {});
                 return res.json({ success: true, message: 'Photo status posted to WhatsApp!' });
             }
 
-            // JSON upload (Text status or Base64 fallback)
             const { type = 'text', text = '', caption = '', backgroundColor = '#075E54', mediaData, mimetype } = req.body || {};
             if (type === 'text' || !mediaData) {
                 const cleanText = String(text || caption).trim();
@@ -480,6 +562,7 @@ function createApiRouter() {
                     { text: cleanText },
                     { statusJidList, backgroundColor, font: 1 }
                 );
+                if (typeof sock.sendPresenceUpdate === 'function') sock.sendPresenceUpdate('unavailable').catch(() => {});
                 return res.json({ success: true, message: 'Text status posted to WhatsApp!' });
             }
 
@@ -491,6 +574,7 @@ function createApiRouter() {
             } else {
                 await sock.sendMessage('status@broadcast', { image: buf, mimetype: mimetype || 'image/jpeg', caption }, { statusJidList });
             }
+            if (typeof sock.sendPresenceUpdate === 'function') sock.sendPresenceUpdate('unavailable').catch(() => {});
             res.json({ success: true, message: 'Status posted to WhatsApp!' });
         } catch (err) {
             console.error('[api/status/upload] Error:', err.message);
@@ -545,22 +629,43 @@ function createApiRouter() {
         res.json({ success: true, message: 'Auto-Status settings saved.', ...updated });
     });
 
-    // ── Channel Auto-React Rules ─────────────────────────────────────────
-    router.post('/char/rules', (req, res) => {
-        const { channelUrl, channelName = '', emojis = ['❤️', '🔥', '👍'] } = req.body || {};
-        if (!String(channelUrl || '').trim()) {
-            return res.status(400).json({ success: false, error: 'Channel link or JID is required.' });
+    // ── Channel Auto-React Rules (Resolves invite link -> @newsletter JID immediately!)
+    router.post('/char/rules', async (req, res) => {
+        try {
+            const { channelUrl, channelName = '', emojis = ['❤️', '🔥', '👍'] } = req.body || {};
+            if (!String(channelUrl || '').trim()) {
+                return res.status(400).json({ success: false, error: 'Channel link or JID is required.' });
+            }
+            const sock = baileysManager.getActiveSocket();
+            const { resolvedJid, resolvedName } = await baileysManager.resolveAndFollowChannel(
+                sock,
+                channelUrl,
+                channelName
+            );
+            store.addChannelRule({
+                channelUrl,
+                resolvedJid,
+                channelName: resolvedName,
+                emojis
+            });
+            baileysManager.rebuildChannelRuleIndex();
+            res.json({
+                success: true,
+                jid: resolvedJid,
+                message: `Instant auto-react enabled for ${resolvedName}!`
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: err.message });
         }
-        store.addChannelRule({ channelUrl, channelName, emojis });
-        res.json({ success: true, message: 'Channel auto-react rule saved!' });
     });
 
     router.delete('/char/rules/:id', (req, res) => {
         store.deleteChannelRule(req.params.id);
+        baileysManager.rebuildChannelRuleIndex();
         res.json({ success: true, message: 'Channel rule deleted.' });
     });
 
-    // ── Full No-Crop Profile Picture Tool ────────────────────────────────
+    // ── Full 100% Same-Resolution Uncropped Profile Picture (.fdp) ───────
     router.post('/profile-pic/full', async (req, res) => {
         try {
             const { targetType = 'personal', groupJid = '', imageData } = req.body || {};
@@ -572,7 +677,7 @@ function createApiRouter() {
 
             const imageBuffer = Buffer.from(String(imageData), 'base64');
             await baileysManager.setFullProfilePicture(sock, { targetType, groupJid, imageBuffer });
-            res.json({ success: true, message: 'Full profile picture updated without cropping!' });
+            res.json({ success: true, message: 'Full uncropped DP applied at 100% same picture resolution (.fdp)!' });
         } catch (err) {
             res.status(500).json({ success: false, error: err.message || 'Failed to update profile picture.' });
         }

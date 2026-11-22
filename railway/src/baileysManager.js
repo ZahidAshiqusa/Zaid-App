@@ -11,6 +11,7 @@ const {
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     Browsers,
+    S_WHATSAPP_NET,
     delay
 } = require('@whiskeysockets/baileys');
 
@@ -30,13 +31,14 @@ try {
 
 const config = require('./config');
 const store = require('./store');
+const { resolveMediaPayload } = require('./mediaDownloader');
 
 const logger = pino({ level: 'silent' });
 const msgRetryCounterCache = new NodeCache({ stdTTL: 600, checkperiod: 120 });
 
 // In-memory recent raw Baileys messages for Anti-Delete recovery & getMessage retries
 const rawMessageCache = new Map();
-const MAX_RAW_CACHE = 2000;
+const MAX_RAW_CACHE = 2500;
 
 function cacheRawMessage(jid, id, msgObj) {
     if (!jid || !id || !msgObj) return;
@@ -70,6 +72,12 @@ function toWhatsAppJid(input) {
     return digits.length >= 7 ? `${digits}@s.whatsapp.net` : '';
 }
 
+function extractChannelInviteCode(urlOrJid) {
+    const str = String(urlOrJid || '').trim();
+    const match = str.match(/whatsapp\.com\/channel\/([A-Za-z0-9_-]+)/i);
+    return match ? match[1] : null;
+}
+
 function unwrapMessageContent(message) {
     if (!message || typeof message !== 'object') return { inner: null, isViewOnce: false };
     let isViewOnce = false;
@@ -91,6 +99,23 @@ function unwrapMessageContent(message) {
         m = m.documentWithCaptionMessage.message;
     }
     return { inner: m, isViewOnce };
+}
+
+function extractButtonClickId(message) {
+    const { inner } = unwrapMessageContent(message);
+    if (!inner) return '';
+    if (inner.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
+        try {
+            const p = JSON.parse(inner.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
+            return String(p.id || p.display_text || '').trim();
+        } catch (_) {}
+    }
+    return String(
+        inner.buttonsResponseMessage?.selectedButtonId ||
+        inner.templateButtonReplyMessage?.selectedId ||
+        inner.listResponseMessage?.singleSelectReply?.selectedRowId ||
+        ''
+    ).trim();
 }
 
 function extractReadableMessage(message) {
@@ -142,8 +167,64 @@ function extractReadableMessage(message) {
 
 class BaileysManager {
     constructor() {
-        this.sessions = new Map(); // cleanNumber -> { sock, connected, pending, reconnecting, sessionDir, saveCreds, pairingExpiresAt }
+        this.sessions = new Map();
         this.startedAt = Date.now();
+        this.channelRuleIndex = new Map(); // newsletterJid -> rule for O(1) instant reactions
+        this.rebuildChannelRuleIndex();
+    }
+
+    rebuildChannelRuleIndex() {
+        this.channelRuleIndex.clear();
+        for (const rule of store.state.channelRules || []) {
+            if (rule && rule.active !== false && rule.jid) {
+                this.channelRuleIndex.set(rule.jid, rule);
+            }
+        }
+    }
+
+    async resolveAndFollowChannel(sock, channelUrlOrJid, customName) {
+        const trimmed = String(channelUrlOrJid || '').trim();
+        let resolvedJid = trimmed;
+        let resolvedName = String(customName || '').trim();
+
+        const inviteCode = extractChannelInviteCode(trimmed);
+        if (inviteCode && sock && typeof sock.newsletterMetadata === 'function') {
+            try {
+                const meta = await sock.newsletterMetadata('invite', inviteCode);
+                if (meta?.id) {
+                    resolvedJid = meta.id;
+                    if (!resolvedName && meta.name) resolvedName = meta.name;
+                }
+            } catch (err) {
+                console.warn('[channel] newsletterMetadata invite lookup failed:', err.message);
+            }
+        }
+
+        if (resolvedJid.endsWith('@newsletter') && sock && typeof sock.newsletterFollow === 'function') {
+            sock.newsletterFollow(resolvedJid).catch(() => {});
+        }
+
+        return { resolvedJid, resolvedName: resolvedName || resolvedJid };
+    }
+
+    async ensureAllChannelRulesResolved(sock) {
+        if (!sock) return;
+        let changed = false;
+        for (const rule of store.state.channelRules || []) {
+            if (rule.active === false) continue;
+            if (!String(rule.jid || '').endsWith('@newsletter')) {
+                const { resolvedJid, resolvedName } = await this.resolveAndFollowChannel(sock, rule.channelUrl || rule.jid, rule.name);
+                if (resolvedJid.endsWith('@newsletter')) {
+                    rule.jid = resolvedJid;
+                    if (resolvedName) rule.name = resolvedName;
+                    changed = true;
+                }
+            } else if (typeof sock.newsletterFollow === 'function') {
+                sock.newsletterFollow(rule.jid).catch(() => {});
+            }
+        }
+        if (changed) store.saveLocalNow();
+        this.rebuildChannelRuleIndex();
     }
 
     getConnectedSessions() {
@@ -212,8 +293,10 @@ class BaileysManager {
             },
             msgRetryCounterCache,
             generateHighQualityLinkPreview: false,
+            // STEALTH MODE: NEVER broadcast "online" presence when connected!
             markOnlineOnConnect: false,
-            syncFullHistory: false,
+            // Enable full history sync to load older chats & messages
+            syncFullHistory: true,
             connectTimeoutMs: 45000,
             defaultQueryTimeoutMs: 45000,
             keepAliveIntervalMs: 25000,
@@ -224,12 +307,63 @@ class BaileysManager {
         });
     }
 
+    _keepStealthUnavailable(sock) {
+        if (sock && typeof sock.sendPresenceUpdate === 'function') {
+            sock.sendPresenceUpdate('unavailable').catch(() => {});
+        }
+    }
+
     _attachEventHandlers(sock, cleanNumber, sessionDir, saveCreds) {
         sock.ev.on('creds.update', async () => {
             try {
                 await saveCreds();
                 store.backupSessionDirToPostgres(cleanNumber, sessionDir).catch(() => {});
             } catch (_) {}
+        });
+
+        // Older chat & message history sync from WhatsApp linked device
+        sock.ev.on('messaging-history.set', ({ chats = [], contacts = [], messages = [] }) => {
+            try {
+                for (const c of contacts) {
+                    if (c?.id) store.upsertContact(c.id, c.name || c.notify || c.verifiedName);
+                }
+                for (const ch of chats) {
+                    if (!ch?.id || ch.id === 'status@broadcast' || ch.id.endsWith('@newsletter')) continue;
+                    const ts = ch.conversationTimestamp
+                        ? Number(ch.conversationTimestamp) * 1000
+                        : 0;
+                    store.upsertChatSummary(ch.id, {
+                        name: ch.name || ch.subject || '',
+                        lastTimestamp: ts,
+                        unreadCount: Number(ch.unreadCount) || 0
+                    });
+                }
+                for (const msg of messages) {
+                    const jid = msg?.key?.remoteJid;
+                    if (!jid || jid === 'status@broadcast' || jid.endsWith('@newsletter') || !msg.message) continue;
+                    const extracted = extractReadableMessage(msg.message);
+                    if (!extracted.text && extracted.mediaType === 'text') continue;
+                    const ts = msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now();
+                    const statusNum = typeof msg.status === 'number' ? msg.status : (msg.key.fromMe ? 2 : 4);
+                    store.recordMessage(
+                        jid,
+                        {
+                            id: msg.key.id,
+                            fromMe: Boolean(msg.key.fromMe),
+                            senderJid: msg.key.participant || jid,
+                            senderName: msg.pushName || '',
+                            text: extracted.text,
+                            mediaType: extracted.mediaType,
+                            timestamp: ts,
+                            status: statusNum
+                        },
+                        { isHistory: true }
+                    );
+                }
+                console.log(`[baileys] History sync ingested: ${chats.length} chats, ${contacts.length} contacts, ${messages.length} older messages.`);
+            } catch (err) {
+                console.warn('[baileys] messaging-history.set error:', err.message);
+            }
         });
 
         sock.ev.on('contacts.upsert', (contacts) => {
@@ -251,6 +385,53 @@ class BaileysManager {
             for (const ch of chats) {
                 if (!ch?.id || ch.id === 'status@broadcast') continue;
                 store.upsertContact(ch.id, ch.name || ch.subject);
+                store.upsertChatSummary(ch.id, {
+                    name: ch.name || ch.subject || '',
+                    lastTimestamp: ch.conversationTimestamp ? Number(ch.conversationTimestamp) * 1000 : 0,
+                    unreadCount: Number(ch.unreadCount) || 0
+                });
+            }
+        });
+
+        // Track receiver's WhatsApp Last Seen timestamp (NEVER display online!)
+        sock.ev.on('presence.update', ({ id, presences }) => {
+            if (!id || !presences) return;
+            for (const [jid, data] of Object.entries(presences)) {
+                const target = jid || id;
+                if (data?.lastSeen) {
+                    store.recordLastSeen(target, Number(data.lastSeen) * 1000);
+                } else if (data?.lastKnownPresence === 'available' || data?.lastKnownPresence === 'composing') {
+                    // Record timestamp as last seen time, never expose "online"
+                    store.recordLastSeen(target, Date.now());
+                }
+            }
+        });
+
+        // Track REAL WhatsApp message ack transitions: 2 = single tick (offline), 3 = double tick (delivered), 4 = blue tick (read)
+        sock.ev.on('messages.update', (updates) => {
+            if (!Array.isArray(updates)) return;
+            for (const item of updates) {
+                const jid = item?.key?.remoteJid;
+                const msgId = item?.key?.id;
+                const status = item?.update?.status;
+                if (jid && msgId && typeof status === 'number') {
+                    store.updateMessageStatus(jid, msgId, status);
+                }
+            }
+        });
+
+        sock.ev.on('message-receipt.update', (receipts) => {
+            if (!Array.isArray(receipts)) return;
+            for (const item of receipts) {
+                const jid = item?.key?.remoteJid;
+                const msgId = item?.key?.id;
+                const rec = item?.receipt;
+                if (!jid || !msgId || !rec) continue;
+                if (rec.readTimestamp || rec.playedTimestamp) {
+                    store.updateMessageStatus(jid, msgId, 4);
+                } else if (rec.receiptTimestamp) {
+                    store.updateMessageStatus(jid, msgId, 3);
+                }
             }
         });
 
@@ -271,14 +452,18 @@ class BaileysManager {
             }
         });
 
+        // FAST-PATH message handler: Channel Auto-React fires INSTANTLY before anything else!
         sock.ev.on('messages.upsert', async ({ messages }) => {
             if (!Array.isArray(messages)) return;
             for (const msg of messages) {
-                try {
-                    await this._handleIncomingMessage(sock, cleanNumber, msg);
-                } catch (err) {
-                    console.warn('[baileys] Message processing error:', err.message);
+                const remoteJid = msg?.key?.remoteJid || '';
+                if (remoteJid.endsWith('@newsletter')) {
+                    this._reactToChannelPostInstantly(sock, msg);
+                    continue;
                 }
+                this._handleIncomingMessage(sock, cleanNumber, msg).catch(err => {
+                    console.warn('[baileys] Message processing error:', err.message);
+                });
             }
         });
 
@@ -291,11 +476,10 @@ class BaileysManager {
                 entry.connected = true;
                 entry.pending = false;
                 entry.reconnecting = false;
-                console.log(`[baileys] WhatsApp session +${cleanNumber} connected in stealth mode (no online/last-seen presence).`);
+                console.log(`[baileys] WhatsApp session +${cleanNumber} connected in stealth mode (offline presence).`);
+                this._keepStealthUnavailable(sock);
+                this.ensureAllChannelRulesResolved(sock).catch(() => {});
                 try {
-                    if (typeof sock.sendPresenceUpdate === 'function') {
-                        await sock.sendPresenceUpdate('unavailable').catch(() => {});
-                    }
                     await saveCreds();
                     await store.backupSessionDirToPostgres(cleanNumber, sessionDir);
                 } catch (_) {}
@@ -313,7 +497,6 @@ class BaileysManager {
                     return;
                 }
 
-                // Do not interrupt active uncompleted pairing code window unless handshake just finished (515)
                 if (entry.pending && statusCode !== DisconnectReason.restartRequired && statusCode !== 515) {
                     return;
                 }
@@ -327,6 +510,32 @@ class BaileysManager {
                 }
             }
         });
+    }
+
+    /**
+     * Zero-latency O(1) instant emoji reactor for new WhatsApp Channel (@newsletter) posts.
+     */
+    _reactToChannelPostInstantly(sock, msg) {
+        const remoteJid = msg?.key?.remoteJid;
+        if (!remoteJid) return;
+        const rule = this.channelRuleIndex.get(remoteJid);
+        if (!rule || rule.active === false || !Array.isArray(rule.emojis) || rule.emojis.length === 0) return;
+
+        const serverId = String(
+            msg.key?.server_id ||
+            msg.message?.newsletterAdminInviteMessage?.server_id ||
+            msg.key?.id ||
+            ''
+        ).trim();
+        if (!serverId) return;
+
+        const emoji = rule.emojis[Math.floor(Math.random() * rule.emojis.length)];
+        if (typeof sock.newsletterReactMessage === 'function') {
+            // Fire immediately without any delay
+            sock.newsletterReactMessage(remoteJid, serverId, emoji).catch(err => {
+                console.warn(`[channel] Instant react failed on ${remoteJid}#${serverId}:`, err.message);
+            });
+        }
     }
 
     async _handleIncomingMessage(sock, cleanNumber, msg) {
@@ -368,25 +577,12 @@ class BaileysManager {
                 if (autoCfg.autoReplyStatus && autoCfg.replyMessage && participant) {
                     await sock.sendMessage(participant, { text: autoCfg.replyMessage }).catch(() => {});
                 }
+                this._keepStealthUnavailable(sock);
             }
             return;
         }
 
-        // 2. Handle WhatsApp Channels (@newsletter) Auto-React Rules
-        if (remoteJid.endsWith('@newsletter')) {
-            const matchingRule = store.state.channelRules.find(
-                r => r.active !== false && (r.jid === remoteJid || (r.channelUrl && r.channelUrl.includes(remoteJid)))
-            );
-            if (matchingRule && matchingRule.emojis.length > 0 && msg.key.server_id) {
-                const emoji = matchingRule.emojis[Math.floor(Math.random() * matchingRule.emojis.length)];
-                if (typeof sock.newsletterReactMessage === 'function') {
-                    await sock.newsletterReactMessage(remoteJid, String(msg.key.server_id), emoji).catch(() => {});
-                }
-            }
-            return;
-        }
-
-        // 3. Anti-Delete Protocol Message Detection
+        // 2. Anti-Delete Protocol Message Detection
         const proto = msg.message.protocolMessage;
         if (proto && proto.type === 0 && proto.key?.id) {
             if (store.state.vaultSettings.antiDeleteEnabled) {
@@ -413,6 +609,7 @@ class BaileysManager {
                             await sock.sendMessage(ownerJid, {
                                 text: `Recovered Deleted Message from ${origName} (+${origNum}):\n${extracted.text || `[${extracted.mediaType}]`}`
                             }).catch(() => {});
+                            this._keepStealthUnavailable(sock);
                         }
                     }
                 }
@@ -420,11 +617,28 @@ class BaileysManager {
             return;
         }
 
-        // Cache message for future anti-delete lookup & retries
         cacheRawMessage(remoteJid, msgId, msg);
 
         if (!fromMe && msg.pushName) {
             store.upsertContact(participant, msg.pushName);
+        }
+
+        // 3. Handle Interactive Song/Video Button Taps (.play <id> / .video <id>)
+        const clickedBtn = extractButtonClickId(msg.message);
+        if (clickedBtn) {
+            const btnPlay = clickedBtn.match(/^\.play\s+(.+)$/i);
+            const btnVideo = clickedBtn.match(/^\.video\s+(.+)$/i);
+            if (btnPlay || btnVideo) {
+                const mode = btnVideo ? 'video' : 'song';
+                const q = (btnVideo ? btnVideo[1] : btnPlay[1]).trim();
+                try {
+                    const resolved = await resolveMediaPayload({ platform: mode, query: q, caption: '' });
+                    await this.sendMediaWithButtons(sock, remoteJid, resolved, true);
+                } catch (err) {
+                    console.warn('[baileys] Button media reply error:', err.message);
+                }
+                return;
+            }
         }
 
         const extracted = extractReadableMessage(msg.message);
@@ -445,6 +659,7 @@ class BaileysManager {
 
         // 5. Record normal chat message into store
         if (extracted.text || extracted.mediaType !== 'text') {
+            const statusNum = typeof msg.status === 'number' ? msg.status : (fromMe ? 2 : 4);
             store.recordMessage(remoteJid, {
                 id: msgId,
                 fromMe,
@@ -452,9 +667,55 @@ class BaileysManager {
                 senderName,
                 text: extracted.text,
                 mediaType: extracted.mediaType,
-                timestamp
+                timestamp,
+                status: statusNum
             });
         }
+    }
+
+    async subscribeLastSeen(jid) {
+        const sock = this.getActiveSocket();
+        if (sock && jid && !jid.endsWith('@g.us') && typeof sock.presenceSubscribe === 'function') {
+            try {
+                await sock.presenceSubscribe(jid);
+                this._keepStealthUnavailable(sock);
+            } catch (_) {}
+        }
+        return store.getLastSeen(jid);
+    }
+
+    async fetchOlderMessages(jid, oldestMsgId, oldestTimestamp, fromMe = false) {
+        const sock = this.getActiveSocket();
+        if (!sock) {
+            return { fetched: false, message: 'WhatsApp is not linked yet.' };
+        }
+        if (jid && oldestMsgId && typeof sock.fetchMessageHistory === 'function') {
+            try {
+                await sock.fetchMessageHistory(
+                    50,
+                    { remoteJid: jid, id: oldestMsgId, fromMe: Boolean(fromMe) },
+                    Number(oldestTimestamp) || Date.now()
+                );
+                this._keepStealthUnavailable(sock);
+                await delay(1200);
+                return { fetched: true, message: 'Requested older WhatsApp messages from linked device.' };
+            } catch (err) {
+                console.warn('[baileys] fetchMessageHistory error:', err.message);
+            }
+        }
+        // Also refresh participating groups into chats list
+        if (typeof sock.groupFetchAllParticipating === 'function') {
+            try {
+                const groups = await sock.groupFetchAllParticipating();
+                for (const g of Object.values(groups || {})) {
+                    store.upsertChatSummary(g.id, {
+                        name: g.subject || g.id,
+                        lastTimestamp: g.creation ? Number(g.creation) * 1000 : 0
+                    });
+                }
+            } catch (_) {}
+        }
+        return { fetched: true, message: 'Synced available chat history.' };
     }
 
     async startSession(cleanNumber, sessionDir) {
@@ -517,7 +778,6 @@ class BaileysManager {
             } catch (_) {}
         }
 
-        // Start clean ephemeral pairing socket
         if (existing?.sock) {
             try {
                 existing.sock.ev.removeAllListeners();
@@ -545,7 +805,6 @@ class BaileysManager {
 
         this._attachEventHandlers(sock, cleanNumber, sessionDir, saveCreds);
 
-        // Wait briefly for Noise handshake to initialize
         if (typeof sock.waitForSocketOpen === 'function') {
             await Promise.race([sock.waitForSocketOpen().catch(() => {}), delay(5000)]);
         }
@@ -566,6 +825,47 @@ class BaileysManager {
         };
     }
 
+    /**
+     * Send YouTube Song (MP3) or Video Song (MP4) directly WITH interactive buttons.
+     */
+    async sendMediaWithButtons(sock, jid, resolved, withButtons = true) {
+        const sent = await sock.sendMessage(jid, resolved.baileysPayload);
+        const buttonLabels = [];
+
+        if (withButtons && (resolved.platform === 'song' || resolved.platform === 'video') && resolved.videoId) {
+            const buttons = resolved.platform === 'song'
+                ? [
+                    { id: `.video ${resolved.videoId}`, text: '🎬 Video Song' },
+                    { id: `.play ${resolved.videoId}`, text: '🎵 Audio MP3' }
+                ]
+                : [
+                    { id: `.play ${resolved.videoId}`, text: '🎵 Audio MP3' },
+                    { id: `.video ${resolved.videoId}`, text: '🎬 HD Video' }
+                ];
+
+            buttonLabels.push(...buttons.map(b => b.text));
+
+            if (kangoSendButtons) {
+                try {
+                    const durationText = resolved.duration ? ` • ${resolved.duration}` : '';
+                    await kangoSendButtons(sock, jid, {
+                        text: `🎵 *${resolved.title}*${durationText}`,
+                        footer: config.appName,
+                        buttons
+                    });
+                } catch (err) {
+                    console.warn('[baileys] Song/Video interactive button card skipped:', err.message);
+                }
+            }
+        }
+
+        this._keepStealthUnavailable(sock);
+        return {
+            id: sent?.key?.id || `media_${Date.now()}`,
+            buttons: buttonLabels
+        };
+    }
+
     async sendInteractiveButtons(sock, jid, { title, body, buttons }) {
         const cleanButtons = (Array.isArray(buttons) ? buttons : [])
             .map((b, idx) => ({
@@ -583,13 +883,13 @@ class BaileysManager {
                     footer: config.appName,
                     buttons: cleanButtons
                 });
+                this._keepStealthUnavailable(sock);
                 return { buttonCount: cleanButtons.length, fallback: false };
             } catch (err) {
                 console.warn('[baileys] kango-wa sendButtons fallback:', err.message);
             }
         }
 
-        // Universal fallback that renders cleanly on all WhatsApp versions
         const formattedLines = [
             title ? `*${title}*` : '',
             bodyText,
@@ -598,48 +898,76 @@ class BaileysManager {
         ].filter(Boolean).join('\n');
 
         await sock.sendMessage(jid, { text: formattedLines });
+        this._keepStealthUnavailable(sock);
         return { buttonCount: cleanButtons.length, fallback: true };
     }
 
+    /**
+     * .fdp Fundamental: Set 100% full uncropped picture at original aspect ratio & high resolution
+     * directly through WhatsApp's w:profile:picture IQ stanza (ZERO crop, ZERO color bars).
+     */
     async setFullProfilePicture(sock, { targetType, groupJid, imageBuffer }) {
         let finalBuffer = imageBuffer;
 
-        // Square-pad image using Jimp so WhatsApp never crops full portrait/landscape photos
+        // Preserve 100% of the full uncropped image (exact aspect ratio, high JPEG quality)
+        // Only scale down proportionally if exceeding 1080px so WhatsApp's IQ node accepts it crisply.
         if (JimpLib) {
             try {
                 const JimpClass = JimpLib.Jimp || JimpLib;
                 if (typeof JimpClass.fromBuffer === 'function') {
                     const img = await JimpClass.fromBuffer(imageBuffer);
-                    const size = Math.max(img.width, img.height, 640);
-                    const canvas = new JimpClass({ width: size, height: size, color: 0x075e54ff });
-                    const x = Math.floor((size - img.width) / 2);
-                    const y = Math.floor((size - img.height) / 2);
-                    canvas.composite(img, x, y);
-                    finalBuffer = await canvas.getBuffer('image/jpeg', { quality: 90 });
+                    const maxSide = Math.max(img.width, img.height);
+                    if (maxSide > 1080) {
+                        img.scale(1080 / maxSide);
+                    }
+                    finalBuffer = await img.getBuffer('image/jpeg', { quality: 95 });
                 } else if (typeof JimpClass.read === 'function') {
                     const img = await JimpClass.read(imageBuffer);
-                    const size = Math.max(img.bitmap.width, img.bitmap.height, 640);
-                    const bg = new JimpClass(size, size, 0x075e54ff);
-                    const x = Math.floor((size - img.bitmap.width) / 2);
-                    const y = Math.floor((size - img.bitmap.height) / 2);
-                    bg.composite(img, x, y);
-                    finalBuffer = await bg.getBufferAsync(JimpClass.MIME_JPEG);
+                    const maxSide = Math.max(img.bitmap.width, img.bitmap.height);
+                    if (maxSide > 1080) {
+                        img.scale(1080 / maxSide);
+                    }
+                    finalBuffer = await img.quality(95).getBufferAsync(JimpClass.MIME_JPEG);
                 }
             } catch (err) {
-                console.warn('[baileys] Jimp square pad skipped, uploading original buffer:', err.message);
+                console.warn('[fdp] Jimp JPEG normalization skipped, uploading raw full buffer:', err.message);
             }
         }
 
-        const targetJid = targetType === 'group' && groupJid
+        const isGroup = targetType === 'group' && Boolean(groupJid);
+        const targetJid = isGroup
             ? toWhatsAppJid(groupJid)
             : (sock.user?.id ? `${sock.user.id.split(':')[0]}@s.whatsapp.net` : '');
 
         if (!targetJid) {
-            throw new Error('Could not resolve target JID for profile picture update.');
+            throw new Error('Could not resolve target JID for full DP update.');
         }
 
-        await sock.updateProfilePicture(targetJid, finalBuffer);
-        return targetJid;
+        // Primary .fdp fundamental: direct w:profile:picture IQ stanza preserves 100% uncropped frame
+        try {
+            const iqAttrs = isGroup
+                ? { target: targetJid, to: S_WHATSAPP_NET || '@s.whatsapp.net', type: 'set', xmlns: 'w:profile:picture' }
+                : { to: S_WHATSAPP_NET || '@s.whatsapp.net', type: 'set', xmlns: 'w:profile:picture' };
+
+            await sock.query({
+                tag: 'iq',
+                attrs: iqAttrs,
+                content: [
+                    {
+                        tag: 'picture',
+                        attrs: { type: 'image' },
+                        content: finalBuffer
+                    }
+                ]
+            });
+            this._keepStealthUnavailable(sock);
+            return targetJid;
+        } catch (iqErr) {
+            console.warn('[fdp] Direct IQ stanza fallback to updateProfilePicture:', iqErr.message);
+            await sock.updateProfilePicture(targetJid, finalBuffer);
+            this._keepStealthUnavailable(sock);
+            return targetJid;
+        }
     }
 
     async syncAllToCloud() {

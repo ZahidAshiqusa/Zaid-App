@@ -37,5 +37,9 @@ module.exports = {
     supabaseUrl: cleanEnv('SUPABASE_URL'),
     supabasePublishableKey: cleanEnv('SUPABASE_PUBLISHABLE_KEY'),
     supabaseSecretKey: cleanEnv('SUPABASE_SECRET_KEY'),
-    giphyApiKey: cleanEnv('GIPHY_API_KEY')
+    giphyApiKey: cleanEnv('GIPHY_API_KEY'),
+    truecallerApiUrl: cleanEnv('TRUECALLER_API_URL'),
+    truecallerToken: cleanEnv('TRUECALLER_TOKEN'),
+    simDbApiUrl: cleanEnv('SIM_DB_API_URL'),
+    simDbApiKey: cleanEnv('SIM_DB_API_KEY')
 };

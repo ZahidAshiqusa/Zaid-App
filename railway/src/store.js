@@ -8,12 +8,13 @@ const config = require('./config');
 const STATE_FILE = path.join(config.DATA_DIR, 'app_state.json');
 
 const DEFAULT_STATE = {
-    chats: {},           // jid -> { jid, number, cleanNumber, contactName, name, lastMessage, lastMessageType, lastTimestamp, messageCount, unreadCount, isGroup }
-    messages: {},        // cleanKey -> Array<{ id, fromMe, senderJid, senderName, text, mediaType, timestamp, isoTime, buttons }>
+    chats: {},           // jid -> chat summary
+    messages: {},        // cleanKey -> Array<{ id, fromMe, senderJid, senderName, text, mediaType, timestamp, isoTime, buttons, status }>
     contacts: {},        // jid -> { number, jid, name }
-    capturedStatuses: [],// Array<{ id, senderName, senderNumber, senderJid, mediaType, caption, timestamp }>
-    vaultItems: [],      // Array<{ id, type, senderName, senderNumber, chatJid, text, mediaType, timestamp }>
-    calls: [],           // Array<{ id, callerJid, callerName, callerNumber, isVideo, status, timestamp }>
+    lastSeenMap: {},     // cleanKey -> epochMs (receiver's WhatsApp last seen time)
+    capturedStatuses: [],
+    vaultItems: [],
+    calls: [],
     vaultSettings: {
         antiDeleteEnabled: true,
         viewOnceEnabled: true,
@@ -45,6 +46,7 @@ class AppStore {
                 return {
                     ...DEFAULT_STATE,
                     ...parsed,
+                    lastSeenMap: parsed.lastSeenMap || {},
                     vaultSettings: { ...DEFAULT_STATE.vaultSettings, ...(parsed.vaultSettings || {}) },
                     autoReactConfig: { ...DEFAULT_STATE.autoReactConfig, ...(parsed.autoReactConfig || {}) }
                 };
@@ -72,9 +74,7 @@ class AppStore {
     }
 
     async initPostgres() {
-        if (!config.databaseUrl) {
-            return false;
-        }
+        if (!config.databaseUrl) return false;
         try {
             const needsSsl = !/localhost|127\.0\.0\.1/i.test(config.databaseUrl);
             this.pool = new Pool({
@@ -204,6 +204,67 @@ class AppStore {
         return raw.split('@')[0].split(':')[0].replace(/\D/g, '') || raw;
     }
 
+    recordLastSeen(jidOrNumber, epochMs) {
+        const key = this.normalizeChatKey(jidOrNumber);
+        if (!key || !epochMs) return;
+        const normalized = epochMs < 1e12 ? epochMs * 1000 : epochMs;
+        if (!this.state.lastSeenMap) this.state.lastSeenMap = {};
+        const prev = this.state.lastSeenMap[key] || 0;
+        if (normalized >= prev) {
+            this.state.lastSeenMap[key] = normalized;
+            this._scheduleSave();
+        }
+    }
+
+    getLastSeen(jidOrNumber) {
+        const key = this.normalizeChatKey(jidOrNumber);
+        const ts = this.state.lastSeenMap?.[key] || 0;
+        return {
+            lastSeen: ts,
+            lastSeenFormatted: ts > 0 ? this.formatWhatsAppLastSeen(ts) : ''
+        };
+    }
+
+    formatWhatsAppLastSeen(timestampMs) {
+        if (!timestampMs || timestampMs <= 0) return '';
+        try {
+            const dt = new Date(timestampMs);
+            const now = new Date();
+            const tz = config.timezone || 'Asia/Karachi';
+            const timeStr = new Intl.DateTimeFormat('en-US', {
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true,
+                timeZone: tz
+            }).format(dt);
+            const dateFmt = new Intl.DateTimeFormat('en-CA', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                timeZone: tz
+            });
+            const todayStr = dateFmt.format(now);
+            const yesterday = new Date(now.getTime() - 86400000);
+            const yesterdayStr = dateFmt.format(yesterday);
+            const targetStr = dateFmt.format(dt);
+
+            if (targetStr === todayStr) {
+                return `last seen today at ${timeStr}`;
+            }
+            if (targetStr === yesterdayStr) {
+                return `last seen yesterday at ${timeStr}`;
+            }
+            const dayMonth = new Intl.DateTimeFormat('en-GB', {
+                day: 'numeric',
+                month: 'short',
+                timeZone: tz
+            }).format(dt);
+            return `last seen ${dayMonth} at ${timeStr}`;
+        } catch (_) {
+            return '';
+        }
+    }
+
     upsertContact(jid, name) {
         if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us') || jid.endsWith('@newsletter')) return;
         const number = jid.split('@')[0].split(':')[0].replace(/\D/g, '');
@@ -223,18 +284,54 @@ class AppStore {
         this._scheduleSave();
     }
 
-    recordMessage(jid, msg) {
+    upsertChatSummary(jid, meta = {}) {
+        if (!jid || jid === 'status@broadcast' || jid.endsWith('@newsletter')) return;
+        const isGroup = jid.endsWith('@g.us');
+        const cleanNumber = isGroup ? jid : this.normalizeChatKey(jid);
+        if (!cleanNumber) return;
+        const normalizedJid = isGroup ? jid : `${cleanNumber}@s.whatsapp.net`;
+        const existing = this.state.chats[normalizedJid];
+        const ts = Number(meta.lastTimestamp) || existing?.lastTimestamp || 0;
+        const contactName =
+            String(meta.contactName || meta.name || '').trim() ||
+            existing?.contactName ||
+            this.state.contacts[normalizedJid]?.name ||
+            (isGroup ? normalizedJid.replace('@g.us', '') : `+${cleanNumber}`);
+
+        this.state.chats[normalizedJid] = {
+            number: cleanNumber,
+            cleanNumber,
+            jid: normalizedJid,
+            contactName,
+            name: contactName,
+            lastMessage: meta.lastMessage !== undefined ? meta.lastMessage : (existing?.lastMessage || ''),
+            lastMessageType: meta.lastMessageType || existing?.lastMessageType || 'text',
+            lastTimestamp: Math.max(ts, existing?.lastTimestamp || 0),
+            messageCount: existing?.messageCount || 0,
+            unreadCount: meta.unreadCount !== undefined ? Number(meta.unreadCount) : (existing?.unreadCount || 0),
+            isGroup
+        };
+        this._scheduleSave();
+    }
+
+    recordMessage(jid, msg, options = {}) {
         if (!jid || jid === 'status@broadcast') return;
         const isGroup = jid.endsWith('@g.us');
         const cleanNumber = isGroup ? jid : this.normalizeChatKey(jid);
         const normalizedJid = isGroup ? jid : `${cleanNumber}@s.whatsapp.net`;
         const chatKey = this.normalizeChatKey(normalizedJid);
         const timestamp = Number(msg.timestamp) || Date.now();
+        const isHistory = Boolean(options.isHistory);
 
         if (!this.state.messages[chatKey]) {
             this.state.messages[chatKey] = [];
         }
         const list = this.state.messages[chatKey];
+
+        // Default outgoing status = 2 (SERVER_ACK = single tick until receiver device ACKs delivery!)
+        const defaultStatus = msg.fromMe ? 2 : 4;
+        const resolvedStatus = typeof msg.status === 'number' && msg.status > 0 ? msg.status : defaultStatus;
+
         const entry = {
             id: msg.id || `msg_${timestamp}_${Math.random().toString(36).slice(2, 6)}`,
             fromMe: Boolean(msg.fromMe),
@@ -244,20 +341,32 @@ class AppStore {
             mediaType: msg.mediaType || 'text',
             timestamp,
             isoTime: new Date(timestamp).toISOString(),
-            buttons: Array.isArray(msg.buttons) ? msg.buttons : []
+            buttons: Array.isArray(msg.buttons) ? msg.buttons : [],
+            status: resolvedStatus
         };
 
         const dupIdx = list.findIndex(m => m.id === entry.id);
         if (dupIdx >= 0) {
-            list[dupIdx] = entry;
+            list[dupIdx] = {
+                ...list[dupIdx],
+                ...entry,
+                status: Math.max(list[dupIdx].status || 2, entry.status)
+            };
         } else {
             list.push(entry);
-            if (list.length > 250) {
-                list.splice(0, list.length - 250);
+            list.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+            if (list.length > 500) {
+                list.splice(0, list.length - 500);
             }
         }
 
+        // Track incoming sender's activity timestamp as a fallback last-seen reference
+        if (!entry.fromMe && !isGroup) {
+            this.recordLastSeen(normalizedJid, timestamp);
+        }
+
         const existingChat = this.state.chats[normalizedJid];
+        const latestMsg = list[list.length - 1] || entry;
         const contactName =
             (!entry.fromMe && msg.senderName && msg.senderName !== `+${cleanNumber}` ? msg.senderName : null) ||
             existingChat?.contactName ||
@@ -270,15 +379,29 @@ class AppStore {
             jid: normalizedJid,
             contactName,
             name: contactName,
-            lastMessage: entry.text || `[${entry.mediaType}]`,
-            lastMessageType: entry.mediaType,
-            lastTimestamp: timestamp,
+            lastMessage: latestMsg.text || `[${latestMsg.mediaType}]`,
+            lastMessageType: latestMsg.mediaType,
+            lastTimestamp: Math.max(latestMsg.timestamp || 0, existingChat?.lastTimestamp || 0),
             messageCount: list.length,
-            unreadCount: entry.fromMe ? 0 : ((existingChat?.unreadCount || 0) + 1),
+            unreadCount: (entry.fromMe || isHistory)
+                ? (existingChat?.unreadCount || 0)
+                : ((existingChat?.unreadCount || 0) + 1),
             isGroup
         };
 
         this._scheduleSave();
+    }
+
+    updateMessageStatus(jid, msgId, newStatus) {
+        if (!jid || !msgId || typeof newStatus !== 'number') return;
+        const key = this.normalizeChatKey(jid);
+        const list = this.state.messages[key];
+        if (!Array.isArray(list)) return;
+        const target = list.find(m => m.id === msgId);
+        if (target && newStatus > (target.status || 0)) {
+            target.status = newStatus;
+            this._scheduleSave();
+        }
     }
 
     getChatsList() {
@@ -295,9 +418,12 @@ class AppStore {
             chat.unreadCount = 0;
             this._scheduleSave();
         }
+        const lastSeenInfo = this.getLastSeen(jid);
         return {
             cleanNumber: key,
             contactName: chat?.contactName || this.state.contacts[jid]?.name || `+${key}`,
+            lastSeen: lastSeenInfo.lastSeen,
+            lastSeenFormatted: lastSeenInfo.lastSeenFormatted,
             messages: list
         };
     }
@@ -386,14 +512,19 @@ class AppStore {
         return this.state.autoReactConfig;
     }
 
-    addChannelRule({ channelUrl, channelName, emojis }) {
+    addChannelRule({ channelUrl, resolvedJid, channelName, emojis }) {
         const cleanUrl = String(channelUrl || '').trim();
+        const jid = String(resolvedJid || (cleanUrl.endsWith('@newsletter') ? cleanUrl : cleanUrl)).trim();
         const id = `ch_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        // Replace existing rule for same JID or URL to prevent duplicates
+        this.state.channelRules = this.state.channelRules.filter(
+            r => r.jid !== jid && r.channelUrl !== cleanUrl
+        );
         const rule = {
             id,
-            jid: cleanUrl.endsWith('@newsletter') ? cleanUrl : cleanUrl,
+            jid,
             channelUrl: cleanUrl,
-            name: String(channelName || '').trim() || cleanUrl,
+            name: String(channelName || '').trim() || jid,
             emojis: Array.isArray(emojis) && emojis.length > 0 ? emojis : ['❤️', '🔥', '👍'],
             active: true
         };

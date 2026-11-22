@@ -1,12 +1,12 @@
 package com.zaidashiq.chat.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -23,8 +23,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -34,7 +37,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zaidashiq.chat.R
 import com.zaidashiq.chat.data.network.BackendConfig
-import com.zaidashiq.chat.ui.components.AnimatedAuroraEmeraldBackground
 import com.zaidashiq.chat.ui.components.PulsingStatusDot
 import com.zaidashiq.chat.ui.theme.*
 import com.zaidashiq.chat.ui.viewmodel.MainUiState
@@ -64,14 +66,29 @@ fun PairingScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(SurfacePureWhite)
+            .background(ObsidianBase)
     ) {
-        // Animated Aurora Emerald Curved Hero Backdrop
-        AnimatedAuroraEmeraldBackground(
+        // Full-bleed luxury obsidian-emerald ambient artwork
+        Image(
+            painter = painterResource(id = R.drawable.img_bg_splash_ambient),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Smooth atmospheric gradient overlay so cards and typography gleam clearly
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(276.dp)
-                .clip(RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp))
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            ObsidianBase.copy(alpha = 0.34f),
+                            ObsidianBase.copy(alpha = 0.54f),
+                            ObsidianBase.copy(alpha = 0.90f)
+                        )
+                    )
+                )
         )
 
         Column(
@@ -79,11 +96,12 @@ fun PairingScreen(
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(horizontal = 20.dp, vertical = 14.dp)
                 .widthIn(max = 560.dp)
                 .align(Alignment.TopCenter),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Top Luxury Glass Bar
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -92,46 +110,60 @@ fun PairingScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(42.dp)
+                            .size(44.dp)
                             .clip(CircleShape)
-                            .background(TextOnDark.copy(alpha = 0.16f))
-                            .border(1.dp, NeonMintAccent.copy(alpha = 0.35f), CircleShape),
+                            .background(GlassCardSurface.copy(alpha = 0.80f))
+                            .border(1.2.dp, NeonMintAccent.copy(alpha = 0.45f), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.ChatBubble,
                             contentDescription = stringResource(R.string.app_name),
                             tint = NeonMintAccent,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(21.dp)
                         )
                     }
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = stringResource(R.string.app_name),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = TextOnDark
-                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = TextOnDark,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Private Stealth Companion",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = NeonMintAccent.copy(alpha = 0.85f)
+                        )
+                    }
                 }
 
                 IconButton(
                     onClick = onOpenConnectionSettings,
-                    modifier = Modifier.testTag("pairing_settings_button")
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(GlassCardSurface.copy(alpha = 0.72f))
+                        .border(1.dp, GlassBorder, CircleShape)
+                        .testTag("pairing_settings_button")
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.SettingsEthernet,
                         contentDescription = stringResource(R.string.menu_connection_settings),
-                        tint = TextOnDark
+                        tint = TextOnDark,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
 
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(28.dp))
 
             AnimatedVisibility(
                 visible = heroEntered,
-                enter = fadeIn(tween(320)) + slideInVertically(
-                    initialOffsetY = { -24 },
-                    animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow)
+                enter = fadeIn(tween(280, easing = FastOutSlowInEasing)) + slideInVertically(
+                    initialOffsetY = { -16 },
+                    animationSpec = tween(280, easing = FastOutSlowInEasing)
                 )
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -139,33 +171,36 @@ fun PairingScreen(
                         text = stringResource(R.string.pairing_title),
                         style = MaterialTheme.typography.headlineLarge,
                         color = TextOnDark,
+                        fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center
                     )
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(8.dp))
                     Text(
                         text = stringResource(R.string.pairing_subtitle),
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextOnDarkMuted,
-                        textAlign = TextAlign.Center
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 8.dp)
                     )
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(26.dp))
 
-            // Main Animated Pairing Card
+            // Flagship Frosted Obsidian-Glass Pairing Card
             AnimatedVisibility(
                 visible = heroEntered,
-                enter = fadeIn(tween(350)) + slideInVertically(
-                    initialOffsetY = { 56 },
-                    animationSpec = spring(dampingRatio = 0.76f, stiffness = Spring.StiffnessLow)
+                enter = fadeIn(tween(320, easing = FastOutSlowInEasing)) + slideInVertically(
+                    initialOffsetY = { 24 },
+                    animationSpec = tween(320, easing = FastOutSlowInEasing)
                 )
             ) {
-                ElevatedCard(
+                Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(26.dp),
-                    colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite),
-                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 8.dp)
+                    shape = RoundedCornerShape(28.dp),
+                    color = GlassCardSurface.copy(alpha = 0.90f),
+                    border = BorderStroke(1.dp, GlassBorderEmerald.copy(alpha = 0.75f)),
+                    shadowElevation = 12.dp
                 ) {
                     Column(
                         modifier = Modifier
@@ -174,14 +209,25 @@ fun PairingScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         // Pulsing Backend Status Pill
-                        val pillColor = if (uiState.backendHealthy) SoftSageTint else ErrorCoral.copy(alpha = 0.1f)
-                        val pillTextColor = if (uiState.backendHealthy) DeepEmerald else ErrorCoral
+                        val pillColor = if (uiState.backendHealthy) {
+                            SoftSagePill.copy(alpha = 0.90f)
+                        } else {
+                            ErrorCoral.copy(alpha = 0.14f)
+                        }
+                        val pillBorder = if (uiState.backendHealthy) {
+                            NeonMintAccent.copy(alpha = 0.35f)
+                        } else {
+                            ErrorCoral.copy(alpha = 0.35f)
+                        }
+                        val pillTextColor = if (uiState.backendHealthy) NeonMintAccent else ErrorCoral
                         val dotColor = if (uiState.backendHealthy) OnlineMint else ErrorCoral
+
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(50))
                                 .background(pillColor)
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                                .border(1.dp, pillBorder, RoundedCornerShape(50))
+                                .padding(horizontal = 14.dp, vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             PulsingStatusDot(
@@ -189,7 +235,7 @@ fun PairingScreen(
                                 isPulsing = uiState.backendHealthy,
                                 size = 8.dp
                             )
-                            Spacer(Modifier.width(6.dp))
+                            Spacer(Modifier.width(8.dp))
                             Text(
                                 text = when {
                                     uiState.backendHealthy -> stringResource(R.string.service_online)
@@ -198,33 +244,41 @@ fun PairingScreen(
                                     else -> stringResource(R.string.service_connecting)
                                 },
                                 style = MaterialTheme.typography.labelMedium,
-                                color = pillTextColor
+                                color = pillTextColor,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
 
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(22.dp))
 
                         OutlinedTextField(
                             value = phoneInput,
                             onValueChange = { phoneInput = it.filter { ch -> ch.isDigit() || ch == '+' || ch == ' ' } },
                             label = { Text(stringResource(R.string.pairing_phone_label)) },
-                            placeholder = { Text(stringResource(R.string.pairing_phone_hint)) },
+                            placeholder = { Text(stringResource(R.string.pairing_phone_hint), color = TextSecondary) },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Rounded.PhoneAndroid,
                                     contentDescription = null,
-                                    tint = DeepEmerald
+                                    tint = NeonMintAccent
                                 )
                             },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                            shape = RoundedCornerShape(16.dp),
+                            shape = RoundedCornerShape(18.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("pairing_phone_input"),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = DeepEmerald,
-                                unfocusedBorderColor = DividerSubtle
+                                focusedContainerColor = GlassCardElevated,
+                                unfocusedContainerColor = ObsidianSurface,
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedBorderColor = NeonMintAccent,
+                                unfocusedBorderColor = GlassBorder,
+                                focusedLabelColor = NeonMintAccent,
+                                unfocusedLabelColor = TextSecondary,
+                                cursorColor = NeonMintAccent
                             )
                         )
 
@@ -238,7 +292,7 @@ fun PairingScreen(
                             )
                         }
 
-                        Spacer(Modifier.height(16.dp))
+                        Spacer(Modifier.height(18.dp))
 
                         Button(
                             onClick = { onGenerateCode(phoneInput) },
@@ -249,24 +303,27 @@ fun PairingScreen(
                                 .testTag("generate_pairing_code_button"),
                             shape = RoundedCornerShape(50),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = DeepEmerald,
-                                contentColor = TextOnDark
+                                containerColor = EmeraldGlow,
+                                contentColor = ObsidianBase,
+                                disabledContainerColor = GlassCardElevated,
+                                disabledContentColor = TextSecondary
                             )
                         ) {
                             if (uiState.isRequestingCode) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(20.dp),
-                                    color = NeonMintAccent,
+                                    color = ObsidianBase,
                                     strokeWidth = 2.5.dp
                                 )
                                 Spacer(Modifier.width(10.dp))
-                                Text("Requesting Baileys Code…")
+                                Text("Requesting Baileys Code…", fontWeight = FontWeight.Bold)
                             } else {
                                 Icon(Icons.Rounded.QrCode2, contentDescription = null, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Text(
                                     text = stringResource(R.string.pairing_generate_btn),
-                                    style = MaterialTheme.typography.labelLarge
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
                         }
@@ -274,30 +331,35 @@ fun PairingScreen(
                         // 8-Digit Pairing Code Reveal
                         AnimatedVisibility(
                             visible = !uiState.pairingCode.isNullOrBlank(),
-                            enter = fadeIn() + scaleIn(
-                                initialScale = 0.88f,
-                                animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMedium)
+                            enter = fadeIn(tween(240, easing = FastOutSlowInEasing)) + slideInVertically(
+                                initialOffsetY = { 16 },
+                                animationSpec = tween(240, easing = FastOutSlowInEasing)
                             )
                         ) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(top = 22.dp),
+                                    .padding(top = 24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Text(
                                     text = "YOUR WHATSAPP PAIRING CODE",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = TextSecondary
+                                    color = TextOnDarkMuted,
+                                    letterSpacing = 1.sp
                                 )
                                 Spacer(Modifier.height(10.dp))
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .background(SoftSageTint)
-                                        .border(1.5.dp, DeepEmerald, RoundedCornerShape(18.dp))
-                                        .padding(vertical = 18.dp, horizontal = 12.dp),
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                listOf(DeepGlassTeal, SoftSagePill)
+                                            )
+                                        )
+                                        .border(1.5.dp, NeonMintAccent.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
+                                        .padding(vertical = 20.dp, horizontal = 12.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
@@ -306,12 +368,12 @@ fun PairingScreen(
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 32.sp,
                                         letterSpacing = 4.sp,
-                                        color = DeepEmerald,
+                                        color = NeonMintAccent,
                                         modifier = Modifier.testTag("pairing_code_display")
                                     )
                                 }
 
-                                Spacer(Modifier.height(12.dp))
+                                Spacer(Modifier.height(14.dp))
 
                                 OutlinedButton(
                                     onClick = {
@@ -319,6 +381,7 @@ fun PairingScreen(
                                         copiedFeedback = true
                                     },
                                     shape = RoundedCornerShape(50),
+                                    border = BorderStroke(1.dp, NeonMintAccent.copy(alpha = 0.45f)),
                                     modifier = Modifier
                                         .height(48.dp)
                                         .testTag("copy_pairing_code_button")
@@ -326,13 +389,14 @@ fun PairingScreen(
                                     Icon(
                                         imageVector = if (copiedFeedback) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
                                         contentDescription = stringResource(R.string.pairing_copy_btn),
-                                        tint = DeepEmerald,
+                                        tint = NeonMintAccent,
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     Text(
                                         text = if (copiedFeedback) stringResource(R.string.pairing_copied_toast) else stringResource(R.string.pairing_copy_btn),
-                                        color = DeepEmerald
+                                        color = NeonMintAccent,
+                                        fontWeight = FontWeight.SemiBold
                                     )
                                 }
 
@@ -344,14 +408,14 @@ fun PairingScreen(
                                     ) {
                                         CircularProgressIndicator(
                                             modifier = Modifier.size(16.dp),
-                                            color = WhatsAppGreen,
+                                            color = NeonMintAccent,
                                             strokeWidth = 2.dp
                                         )
                                         Spacer(Modifier.width(8.dp))
                                         Text(
                                             text = stringResource(R.string.pairing_waiting_status),
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = DeepEmerald,
+                                            color = NeonMintAccent,
                                             fontWeight = FontWeight.SemiBold
                                         )
                                     }
@@ -370,10 +434,17 @@ fun PairingScreen(
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(22.dp))
 
-            TextButton(
+            // Frosted Glass Open Messenger Pill
+            OutlinedButton(
                 onClick = onContinueToHome,
+                shape = RoundedCornerShape(50),
+                border = BorderStroke(1.dp, GlassBorderEmerald),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = GlassCardSurface.copy(alpha = 0.72f),
+                    contentColor = NeonMintAccent
+                ),
                 modifier = Modifier
                     .height(48.dp)
                     .testTag("open_messenger_workspace_button")
@@ -381,16 +452,19 @@ fun PairingScreen(
                 Text(
                     text = "Open Messenger Interface",
                     style = MaterialTheme.typography.labelLarge,
-                    color = DeepEmerald
+                    color = NeonMintAccent,
+                    fontWeight = FontWeight.SemiBold
                 )
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(6.dp))
                 Icon(
                     imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
                     contentDescription = null,
-                    tint = DeepEmerald,
+                    tint = NeonMintAccent,
                     modifier = Modifier.size(18.dp)
                 )
             }
+
+            Spacer(Modifier.height(16.dp))
         }
     }
 }

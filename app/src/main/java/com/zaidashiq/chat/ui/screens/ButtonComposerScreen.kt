@@ -2,7 +2,6 @@ package com.zaidashiq.chat.ui.screens
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -41,12 +40,12 @@ fun ButtonComposerScreen(
     }
 
     Scaffold(
-        containerColor = SurfaceSubtleGray,
+        containerColor = ObsidianBase,
         bottomBar = {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(SurfaceSubtleGray)
+                    .background(ObsidianSurface)
                     .navigationBarsPadding()
                     .imePadding()
                     .padding(horizontal = 20.dp, vertical = 16.dp)
@@ -60,24 +59,25 @@ fun ButtonComposerScreen(
                         .testTag("button_composer_send_button"),
                     shape = RoundedCornerShape(50),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = FloatingMenuTeal,
-                        contentColor = TextOnDark,
-                        disabledContainerColor = FloatingMenuTeal.copy(alpha = 0.45f),
-                        disabledContentColor = TextOnDark.copy(alpha = 0.8f)
+                        containerColor = EmeraldGlow,
+                        contentColor = ObsidianBase,
+                        disabledContainerColor = GlassCardElevated,
+                        disabledContentColor = TextSecondary
                     )
                 ) {
                     if (isSending) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
-                            color = TextOnDark,
+                            color = ObsidianBase,
                             strokeWidth = 2.dp
                         )
                         Spacer(Modifier.width(10.dp))
-                        Text("Sending…", style = MaterialTheme.typography.titleMedium)
+                        Text("Sending…", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     } else {
                         Text(
                             text = stringResource(R.string.button_composer_send),
-                            style = MaterialTheme.typography.titleMedium
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -93,10 +93,9 @@ fun ButtonComposerScreen(
                 .padding(horizontal = 20.dp, vertical = 12.dp)
                 .widthIn(max = 600.dp)
         ) {
-            // < Back action matching Screen 3 of mockup
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .clickable(onClick = onBack)
                     .minimumInteractiveComponentSize()
                     .padding(end = 12.dp)
@@ -106,14 +105,15 @@ fun ButtonComposerScreen(
                 Icon(
                     imageVector = Icons.Rounded.ArrowBackIosNew,
                     contentDescription = stringResource(R.string.button_composer_back),
-                    tint = DeepEmerald,
+                    tint = NeonMintAccent,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
                     text = stringResource(R.string.button_composer_back),
                     style = MaterialTheme.typography.titleMedium,
-                    color = DeepEmerald
+                    color = NeonMintAccent,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
 
@@ -122,12 +122,13 @@ fun ButtonComposerScreen(
             Text(
                 text = stringResource(R.string.button_composer_title),
                 style = MaterialTheme.typography.headlineLarge,
-                color = TextPrimary
+                color = TextPrimary,
+                fontWeight = FontWeight.Bold
             )
             Text(
                 text = "To $recipientName",
                 style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
+                color = NeonMintAccent.copy(alpha = 0.85f)
             )
 
             Spacer(Modifier.height(20.dp))
@@ -135,39 +136,40 @@ fun ButtonComposerScreen(
             Text(
                 text = stringResource(R.string.button_composer_field_label),
                 style = MaterialTheme.typography.titleSmall,
-                color = TextSecondary
+                color = TextOnDarkMuted
             )
 
             Spacer(Modifier.height(8.dp))
 
-            // Rounded white message card matching Screen 3
             OutlinedTextField(
                 value = messageBody,
                 onValueChange = { messageBody = it },
                 placeholder = {
                     Text(
                         text = stringResource(R.string.button_composer_field_hint),
-                        color = TextPrimary.copy(alpha = 0.72f),
+                        color = TextSecondary,
                         style = MaterialTheme.typography.bodyLarge
                     )
                 },
                 minLines = 3,
                 maxLines = 6,
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(18.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("button_composer_message_input"),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = SurfacePureWhite,
-                    unfocusedContainerColor = SurfacePureWhite,
-                    focusedBorderColor = DeepEmerald,
-                    unfocusedBorderColor = DividerSubtle
+                    focusedContainerColor = GlassCardElevated,
+                    unfocusedContainerColor = GlassCardSurface,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    focusedBorderColor = NeonMintAccent,
+                    unfocusedBorderColor = GlassBorder,
+                    cursorColor = NeonMintAccent
                 )
             )
 
             Spacer(Modifier.height(22.dp))
 
-            // Interactive button pills with trash delete icons matching Screen 3
             buttons.forEachIndexed { index, label ->
                 val isPrimaryPill = index == 0
                 Row(
@@ -183,9 +185,9 @@ fun ButtonComposerScreen(
                         },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.titleMedium.copy(
-                            color = DeepEmerald,
+                            color = NeonMintAccent,
                             textAlign = TextAlign.Center,
-                            fontWeight = FontWeight.Medium
+                            fontWeight = FontWeight.SemiBold
                         ),
                         placeholder = {
                             Text(
@@ -200,10 +202,11 @@ fun ButtonComposerScreen(
                             .weight(1f)
                             .testTag("button_option_input_$index"),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = if (isPrimaryPill) SoftSagePill else SurfacePureWhite,
-                            unfocusedContainerColor = if (isPrimaryPill) SoftSagePill else SurfacePureWhite,
-                            focusedBorderColor = DeepEmerald,
-                            unfocusedBorderColor = DeepEmerald.copy(alpha = 0.65f)
+                            focusedContainerColor = if (isPrimaryPill) SoftSagePill else GlassCardSurface,
+                            unfocusedContainerColor = if (isPrimaryPill) SoftSagePill else GlassCardSurface,
+                            focusedBorderColor = NeonMintAccent,
+                            unfocusedBorderColor = GlassBorderEmerald,
+                            cursorColor = NeonMintAccent
                         )
                     )
 
@@ -221,13 +224,12 @@ fun ButtonComposerScreen(
                         Icon(
                             imageVector = Icons.Outlined.DeleteOutline,
                             contentDescription = "Remove button",
-                            tint = if (buttons.size > 1) TextSecondary else TextSecondary.copy(alpha = 0.3f)
+                            tint = if (buttons.size > 1) ErrorCoral else TextSecondary.copy(alpha = 0.3f)
                         )
                     }
                 }
             }
 
-            // Dashed "+ Add Button" box matching Screen 3 (up to 5 WhatsApp buttons)
             if (buttons.size < 5) {
                 Box(
                     modifier = Modifier
@@ -242,7 +244,7 @@ fun ButtonComposerScreen(
                 ) {
                     Canvas(modifier = Modifier.matchParentSize()) {
                         drawRoundRect(
-                            color = DeepEmerald.copy(alpha = 0.55f),
+                            color = NeonMintAccent.copy(alpha = 0.55f),
                             cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx()),
                             style = Stroke(
                                 width = 1.5.dp.toPx(),
@@ -254,14 +256,15 @@ fun ButtonComposerScreen(
                         Icon(
                             imageVector = Icons.Rounded.AddCircleOutline,
                             contentDescription = stringResource(R.string.button_composer_add),
-                            tint = DeepEmerald,
+                            tint = NeonMintAccent,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
                             text = stringResource(R.string.button_composer_add),
                             style = MaterialTheme.typography.titleMedium,
-                            color = DeepEmerald
+                            color = NeonMintAccent,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                 }

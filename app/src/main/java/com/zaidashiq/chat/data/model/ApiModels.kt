@@ -81,6 +81,7 @@ data class ChatMessageItem(
     val timestamp: Long = 0L,
     val isoTime: String = "",
     val buttons: List<String> = emptyList(),
+    val status: Int = 2, // 1=pending/clock, 2=single gray tick (offline/server ack), 3=double gray tick (delivered), 4=double blue tick (read)
     val pending: Boolean = false
 )
 
@@ -89,6 +90,8 @@ data class ChatViewResponse(
     val success: Boolean = false,
     val cleanNumber: String = "",
     val contactName: String = "",
+    val lastSeen: Long = 0L,
+    val lastSeenFormatted: String = "",
     val totalMessages: Int = 0,
     val messages: List<ChatMessageItem> = emptyList(),
     val error: String? = null
@@ -106,6 +109,7 @@ data class SendTextResponse(
     val id: String? = null,
     val recipient: String? = null,
     val text: String? = null,
+    val status: Int = 2,
     val timestamp: Long? = null,
     val error: String? = null
 )
@@ -115,7 +119,8 @@ data class DownloadAndSendRequest(
     val recipient: String,
     val platform: String,
     val query: String,
-    val caption: String = ""
+    val caption: String = "",
+    val withButtons: Boolean = true
 )
 
 @Serializable
@@ -125,6 +130,8 @@ data class DownloadAndSendResponse(
     val platform: String? = null,
     val mediaType: String? = null,
     val title: String? = null,
+    val buttons: List<String> = emptyList(),
+    val status: Int = 2,
     val message: String? = null,
     val error: String? = null
 )
@@ -352,5 +359,71 @@ data class CloudSyncResponse(
     val success: Boolean = false,
     val message: String? = null,
     val configured: Boolean = false,
+    val error: String? = null
+)
+
+@Serializable
+data class TruecallerDetails(
+    val found: Boolean = false,
+    val name: String = "",
+    val carrier: String = "",
+    val country: String = "",
+    val address: String = "",
+    val email: String = "",
+    val spamScore: String = ""
+)
+
+@Serializable
+data class SimRecordItem(
+    val name: String = "",
+    val number: String = "",
+    val cnic: String = "",
+    val address: String = "",
+    val network: String = ""
+)
+
+@Serializable
+data class WhatsAppProfileInfo(
+    val registered: Boolean = false,
+    val about: String = "",
+    val profilePicUrl: String = "",
+    val contactName: String = ""
+)
+
+@Serializable
+data class NumberLookupResponse(
+    val success: Boolean = false,
+    val query: String = "",
+    val formattedNumber: String = "",
+    val localNumber: String = "",
+    val operator: String = "",
+    val truecaller: TruecallerDetails = TruecallerDetails(),
+    val simRecords: List<SimRecordItem> = emptyList(),
+    val whatsapp: WhatsAppProfileInfo = WhatsAppProfileInfo(),
+    val error: String? = null
+)
+
+@Serializable
+data class PresenceResponse(
+    val success: Boolean = false,
+    val jid: String = "",
+    val lastSeen: Long = 0L,
+    val lastSeenFormatted: String = "",
+    val error: String? = null
+)
+
+@Serializable
+data class LoadOlderChatsRequest(
+    val jid: String = "",
+    val oldestMsgId: String = "",
+    val oldestTimestamp: Long = 0L,
+    val fromMe: Boolean = false
+)
+
+@Serializable
+data class LoadOlderChatsResponse(
+    val success: Boolean = false,
+    val fetched: Boolean = false,
+    val message: String? = null,
     val error: String? = null
 )

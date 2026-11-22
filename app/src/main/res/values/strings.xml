@@ -36,9 +36,11 @@
     <string name="menu_connection_settings">Session &amp; Connection</string>
 
     <!-- Chat Screen & + Power Menu -->
-    <string name="chat_input_placeholder">Message or .play song…</string>
-    <string name="chat_play_mode_badge">Direct Song Mode • Sends MP3 directly (no text)</string>
+    <string name="chat_input_placeholder">Message, paste song link, or .play…</string>
+    <string name="chat_play_mode_badge">Direct Song Mode • Sends MP3 + buttons (no text)</string>
+    <string name="chat_song_link_badge">Song Link Detected • Downloads &amp; sends MP3 + buttons</string>
     <string name="chat_direct_media_loading">Sending direct media…</string>
+    <string name="tool_number_details">Number Details</string>
     <string name="tool_video_note">Video Note</string>
     <string name="tool_voice_note">Voice Note</string>
     <string name="tool_fake_location">Fake Location</string>

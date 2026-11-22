@@ -8,7 +8,9 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -31,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
@@ -58,14 +61,15 @@ fun MediaDownloadSheet(
 ) {
     var inputQuery by remember { mutableStateOf("") }
     var caption by remember { mutableStateOf("") }
-    var selectedSubTab by remember { mutableIntStateOf(0) } // 0 = Link/Search, 1 = Giphy (Downloader only)
+    var selectedSubTab by remember { mutableIntStateOf(0) }
     var giphyQuery by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = SurfacePureWhite,
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        containerColor = ObsidianSurface,
+        contentColor = TextPrimary,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
         Column(
             modifier = Modifier
@@ -76,9 +80,10 @@ fun MediaDownloadSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
-                        .background(SoftSageTint),
+                        .background(SoftSagePill)
+                        .border(1.dp, NeonMintAccent.copy(alpha = 0.4f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -91,7 +96,7 @@ fun MediaDownloadSheet(
                             else -> Icons.Rounded.DownloadForOffline
                         },
                         contentDescription = tool.title,
-                        tint = DeepEmerald
+                        tint = NeonMintAccent
                     )
                 }
                 Spacer(Modifier.width(12.dp))
@@ -99,12 +104,17 @@ fun MediaDownloadSheet(
                     Text(
                         text = "${tool.title} Direct Sender",
                         style = MaterialTheme.typography.titleLarge,
-                        color = TextPrimary
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Downloads on Railway & sends actual media file (never the link)",
+                        text = when (tool) {
+                            ChatToolType.SONG -> "Downloads YouTube / Song link MP3 & sends directly with buttons"
+                            ChatToolType.VIDEO -> "Downloads YouTube MP4 & sends directly with buttons"
+                            else -> "Downloads on Railway & sends actual media file directly"
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = WhatsAppGreen
+                        color = NeonMintAccent.copy(alpha = 0.85f)
                     )
                 }
             }
@@ -143,18 +153,29 @@ fun MediaDownloadSheet(
                     OutlinedTextField(
                         value = giphyQuery,
                         onValueChange = { giphyQuery = it },
-                        placeholder = { Text("Search Giphy GIFs…") },
+                        placeholder = { Text("Search Giphy GIFs…", color = TextSecondary) },
                         singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.weight(1f).testTag("giphy_search_input")
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.weight(1f).testTag("giphy_search_input"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = GlassCardElevated,
+                            unfocusedContainerColor = GlassCardSurface,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedBorderColor = NeonMintAccent,
+                            unfocusedBorderColor = GlassBorder
+                        )
                     )
                     Spacer(Modifier.width(8.dp))
                     FilledIconButton(
                         onClick = { onSearchGiphy(giphyQuery) },
-                        colors = IconButtonDefaults.filledIconButtonColors(containerColor = DeepEmerald),
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = EmeraldGlow,
+                            contentColor = ObsidianBase
+                        ),
                         modifier = Modifier.size(52.dp).testTag("giphy_search_button")
                     ) {
-                        Icon(Icons.Rounded.Search, contentDescription = "Search GIFs", tint = TextOnDark)
+                        Icon(Icons.Rounded.Search, contentDescription = "Search GIFs", tint = ObsidianBase)
                     }
                 }
 
@@ -169,7 +190,7 @@ fun MediaDownloadSheet(
                     )
                 } else if (isSearchingGiphy) {
                     Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = DeepEmerald)
+                        CircularProgressIndicator(color = NeonMintAccent)
                     }
                 } else {
                     LazyVerticalGrid(
@@ -182,8 +203,9 @@ fun MediaDownloadSheet(
                             Box(
                                 modifier = Modifier
                                     .aspectRatio(1f)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(SurfaceSubtleGray)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(GlassCardSurface)
+                                    .border(0.8.dp, GlassBorder, RoundedCornerShape(14.dp))
                                     .clickable(enabled = !isBusy) { onSelectGiphy(gif) }
                             ) {
                                 AsyncImage(
@@ -203,7 +225,7 @@ fun MediaDownloadSheet(
                     label = {
                         Text(
                             when (tool) {
-                                ChatToolType.SONG -> "Song name or YouTube URL"
+                                ChatToolType.SONG -> "Song name or YouTube / Spotify / Audio URL"
                                 ChatToolType.VIDEO -> "Video title or YouTube URL"
                                 ChatToolType.TIKTOK -> "Paste TikTok video URL"
                                 ChatToolType.FACEBOOK -> "Paste Facebook video / Reel URL"
@@ -212,19 +234,28 @@ fun MediaDownloadSheet(
                             }
                         )
                     },
-                    placeholder = { Text(tool.hint) },
+                    placeholder = { Text(tool.hint, color = TextSecondary) },
                     trailingIcon = {
                         IconButton(onClick = {
                             clipboard.getText()?.text?.let { pasted -> inputQuery = pasted.trim() }
                         }) {
-                            Icon(Icons.Rounded.ContentPaste, contentDescription = "Paste link", tint = DeepEmerald)
+                            Icon(Icons.Rounded.ContentPaste, contentDescription = "Paste link", tint = NeonMintAccent)
                         }
                     },
                     singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("media_tool_url_input")
+                        .testTag("media_tool_url_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = GlassCardElevated,
+                        unfocusedContainerColor = GlassCardSurface,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedBorderColor = NeonMintAccent,
+                        unfocusedBorderColor = GlassBorder,
+                        focusedLabelColor = NeonMintAccent
+                    )
                 )
 
                 if (tool != ChatToolType.SONG) {
@@ -234,12 +265,21 @@ fun MediaDownloadSheet(
                         onValueChange = { caption = it },
                         label = { Text("Caption (optional)") },
                         singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = GlassCardElevated,
+                            unfocusedContainerColor = GlassCardSurface,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedBorderColor = NeonMintAccent,
+                            unfocusedBorderColor = GlassBorder,
+                            focusedLabelColor = NeonMintAccent
+                        )
                     )
                 }
 
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(16.dp))
 
                 if (isBusy) {
                     MediaSendingLoadingCard(
@@ -258,16 +298,21 @@ fun MediaDownloadSheet(
                         .height(52.dp)
                         .testTag("media_tool_send_button"),
                     shape = RoundedCornerShape(50),
-                    colors = ButtonDefaults.buttonColors(containerColor = FloatingMenuTeal)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = EmeraldGlow,
+                        contentColor = ObsidianBase,
+                        disabledContainerColor = GlassCardElevated,
+                        disabledContentColor = TextSecondary
+                    )
                 ) {
                     if (isBusy) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = NeonMintAccent, strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = ObsidianBase, strokeWidth = 2.dp)
                         Spacer(Modifier.width(10.dp))
-                        Text("Downloading & Sending Direct Media…")
+                        Text("Downloading & Sending Direct Media…", fontWeight = FontWeight.Bold)
                     } else {
                         Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Download & Send ${tool.title}")
+                        Text("Download & Send ${tool.title}", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -292,7 +337,9 @@ fun VideoNoteSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = SurfacePureWhite
+        containerColor = ObsidianSurface,
+        contentColor = TextPrimary,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
         Column(
             modifier = Modifier
@@ -303,23 +350,24 @@ fun VideoNoteSheet(
         ) {
             Box(
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(66.dp)
                     .clip(CircleShape)
-                    .background(SoftSageTint),
+                    .background(SoftSagePill)
+                    .border(1.2.dp, NeonMintAccent.copy(alpha = 0.45f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Rounded.Videocam, contentDescription = null, tint = DeepEmerald, modifier = Modifier.size(32.dp))
+                Icon(Icons.Rounded.Videocam, contentDescription = null, tint = NeonMintAccent, modifier = Modifier.size(32.dp))
             }
-            Spacer(Modifier.height(12.dp))
-            Text("Send Circular Video Note", style = MaterialTheme.typography.titleLarge, color = TextPrimary)
+            Spacer(Modifier.height(14.dp))
+            Text("Send Circular Video Note", style = MaterialTheme.typography.titleLarge, color = TextPrimary, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
             Text(
                 text = "Pick any short video from your device using the zero-permission Android Photo Picker. Baileys sends it as a native WhatsApp round Video Note (PTV).",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextSecondary,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                textAlign = TextAlign.Center
             )
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(20.dp))
             Button(
                 onClick = {
                     videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
@@ -330,16 +378,19 @@ fun VideoNoteSheet(
                     .height(52.dp)
                     .testTag("pick_video_note_button"),
                 shape = RoundedCornerShape(50),
-                colors = ButtonDefaults.buttonColors(containerColor = FloatingMenuTeal)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = EmeraldGlow,
+                    contentColor = ObsidianBase
+                )
             ) {
                 if (isBusy) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = TextOnDark, strokeWidth = 2.dp)
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = ObsidianBase, strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("Uploading Video Note…")
+                    Text("Uploading Video Note…", fontWeight = FontWeight.Bold)
                 } else {
                     Icon(Icons.Rounded.VideoLibrary, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Choose Video for Video Note")
+                    Text("Choose Video for Video Note", fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -439,7 +490,9 @@ fun VoiceNoteSheet(
             if (isRecording) stopRecordingInternal(send = false)
             onDismiss()
         },
-        containerColor = SurfacePureWhite
+        containerColor = ObsidianSurface,
+        contentColor = TextPrimary,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
         Column(
             modifier = Modifier
@@ -448,14 +501,15 @@ fun VoiceNoteSheet(
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("WhatsApp Voice Note (PTT)", style = MaterialTheme.typography.titleLarge, color = TextPrimary)
-            Spacer(Modifier.height(14.dp))
+            Text("WhatsApp Voice Note (PTT)", style = MaterialTheme.typography.titleLarge, color = TextPrimary, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
 
             Box(
                 modifier = Modifier
-                    .size(84.dp)
+                    .size(86.dp)
                     .clip(CircleShape)
-                    .background(if (isRecording) ErrorCoral else FloatingMenuTeal)
+                    .background(if (isRecording) ErrorCoral else EmeraldGlow)
+                    .border(2.dp, if (isRecording) TextOnDark.copy(alpha = 0.4f) else NeonMintAccent, CircleShape)
                     .clickable(enabled = !isBusy) {
                         if (isRecording) {
                             stopRecordingInternal(send = true)
@@ -474,12 +528,12 @@ fun VoiceNoteSheet(
                 Icon(
                     imageVector = if (isRecording) Icons.AutoMirrored.Rounded.Send else Icons.Rounded.Mic,
                     contentDescription = if (isRecording) "Stop and Send Voice Note" else "Start Recording",
-                    tint = TextOnDark,
+                    tint = ObsidianBase,
                     modifier = Modifier.size(36.dp)
                 )
             }
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
                 text = if (isRecording) {
                     "Recording… ${elapsedSec / 60}:${(elapsedSec % 60).toString().padStart(2, '0')} (Tap to Send)"
@@ -500,19 +554,20 @@ fun VoiceNoteSheet(
                 )
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(20.dp))
             OutlinedButton(
                 onClick = { audioPicker.launch(arrayOf("audio/*")) },
                 enabled = !isBusy && !isRecording,
+                border = BorderStroke(1.dp, GlassBorderEmerald),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
                     .testTag("pick_audio_voice_note_button"),
                 shape = RoundedCornerShape(50)
             ) {
-                Icon(Icons.Rounded.AudioFile, contentDescription = null, tint = DeepEmerald)
+                Icon(Icons.Rounded.AudioFile, contentDescription = null, tint = NeonMintAccent)
                 Spacer(Modifier.width(8.dp))
-                Text("Or Pick Audio File as Voice Note", color = DeepEmerald)
+                Text("Or Pick Audio File as Voice Note", color = NeonMintAccent)
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -536,11 +591,13 @@ fun FakeLocationSheet(
     var selectedLabel by remember { mutableStateOf("Lahore, PK") }
     var latText by remember { mutableStateOf("31.5204") }
     var lngText by remember { mutableStateOf("74.3587") }
-    var durationSec by remember { mutableIntStateOf(900) } // 15m default
+    var durationSec by remember { mutableIntStateOf(900) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = SurfacePureWhite
+        containerColor = ObsidianSurface,
+        contentColor = TextPrimary,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
         Column(
             modifier = Modifier
@@ -548,15 +605,15 @@ fun FakeLocationSheet(
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
-            Text("Send Fake Live Location", style = MaterialTheme.typography.titleLarge, color = TextPrimary)
+            Text("Send Fake Live Location", style = MaterialTheme.typography.titleLarge, color = TextPrimary, fontWeight = FontWeight.Bold)
             Text(
                 text = "Sends a native WhatsApp Live Location pin with custom GPS coordinates.",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextSecondary
             )
 
-            Spacer(Modifier.height(12.dp))
-            Text("Quick City Presets", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+            Spacer(Modifier.height(14.dp))
+            Text("Quick City Presets", style = MaterialTheme.typography.labelMedium, color = NeonMintAccent)
             Spacer(Modifier.height(6.dp))
 
             Row(
@@ -604,6 +661,7 @@ fun FakeLocationSheet(
                     },
                     label = { Text("Latitude") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.weight(1f).testTag("fake_location_lat_input")
                 )
@@ -615,13 +673,14 @@ fun FakeLocationSheet(
                     },
                     label = { Text("Longitude") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.weight(1f).testTag("fake_location_lng_input")
                 )
             }
 
             Spacer(Modifier.height(12.dp))
-            Text("Live Duration", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+            Text("Live Duration", style = MaterialTheme.typography.labelMedium, color = NeonMintAccent)
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(900 to "15 min", 3600 to "1 hour", 28800 to "8 hours").forEach { (sec, lbl) ->
@@ -649,11 +708,14 @@ fun FakeLocationSheet(
                     .height(52.dp)
                     .testTag("fake_location_send_button"),
                 shape = RoundedCornerShape(50),
-                colors = ButtonDefaults.buttonColors(containerColor = FloatingMenuTeal)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = EmeraldGlow,
+                    contentColor = ObsidianBase
+                )
             ) {
                 Icon(Icons.Rounded.LocationOn, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Send Fake Location")
+                Text("Send Fake Location", fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(12.dp))
         }

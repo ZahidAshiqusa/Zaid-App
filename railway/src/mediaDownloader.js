@@ -42,15 +42,52 @@ async function downloadBufferFromUrl(url, extraHeaders = {}) {
     };
 }
 
+function isDirectAudioUrl(input) {
+    return /^https?:\/\/.+\.(mp3|m4a|aac|ogg|opus|wav)(\?.*)?$/i.test(String(input || '').trim());
+}
+
+function isSpotifyOrSoundCloudUrl(input) {
+    return /^https?:\/\/(open\.spotify\.com\/track\/|spotify\.link\/|soundcloud\.com\/|on\.soundcloud\.com\/)/i.test(String(input || '').trim());
+}
+
+async function resolveTrackTitleFromMusicLink(url) {
+    try {
+        const oembedUrl = /spotify/i.test(url)
+            ? `https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`
+            : `https://soundcloud.com/oembed?format=json&url=${encodeURIComponent(url)}`;
+        const res = await axios.get(oembedUrl, { timeout: 10000, headers: { 'User-Agent': MOBILE_UA } });
+        const title = String(res.data?.title || '').trim();
+        const author = String(res.data?.author_name || '').trim();
+        if (title) return author && !title.toLowerCase().includes(author.toLowerCase()) ? `${title} ${author}` : title;
+    } catch (_) {}
+    try {
+        const res = await axios.get(url, { timeout: 10000, headers: { 'User-Agent': MOBILE_UA } });
+        const match = String(res.data || '').match(/<title[^>]*>([^<]+)<\/title>/i);
+        if (match && match[1]) {
+            return match[1]
+                .replace(/\s*\|\s*Spotify.*$/i, '')
+                .replace(/\s*-\s*song.*by\s*/i, ' ')
+                .replace(/\s*on SoundCloud.*$/i, '')
+                .trim();
+        }
+    } catch (_) {}
+    return '';
+}
+
 function extractYoutubeId(input) {
     const str = String(input || '').trim();
     if (/^[a-zA-Z0-9_-]{11}$/.test(str)) return str;
-    const match = str.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|v\/))([a-zA-Z0-9_-]{11})/);
+    const match = str.match(/(?:youtu\.be\/|(?:m\.|music\.|www\.)?youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|v\/|live\/))([a-zA-Z0-9_-]{11})/);
     return match ? match[1] : null;
 }
 
 async function resolveYoutubeInfo(queryOrUrl) {
-    const trimmed = String(queryOrUrl || '').trim();
+    let trimmed = String(queryOrUrl || '').trim();
+    if (isSpotifyOrSoundCloudUrl(trimmed)) {
+        const resolvedTitle = await resolveTrackTitleFromMusicLink(trimmed);
+        if (resolvedTitle) trimmed = resolvedTitle;
+    }
+
     const vid = extractYoutubeId(trimmed);
     if (vid) {
         try {
@@ -59,14 +96,20 @@ async function resolveYoutubeInfo(queryOrUrl) {
                 return {
                     videoId: vid,
                     url: `https://www.youtube.com/watch?v=${vid}`,
-                    title: detail.title
+                    title: detail.title,
+                    thumbnail: detail.thumbnail || detail.image || `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+                    duration: detail.timestamp || detail.duration?.timestamp || '',
+                    author: detail.author?.name || 'YouTube'
                 };
             }
         } catch (_) {}
         return {
             videoId: vid,
             url: `https://www.youtube.com/watch?v=${vid}`,
-            title: 'YouTube Media'
+            title: 'YouTube Media',
+            thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+            duration: '',
+            author: 'YouTube'
         };
     }
 
@@ -79,7 +122,10 @@ async function resolveYoutubeInfo(queryOrUrl) {
     return {
         videoId: resolvedId,
         url: `https://www.youtube.com/watch?v=${resolvedId}`,
-        title: first.title || 'YouTube Media'
+        title: first.title || 'YouTube Media',
+        thumbnail: first.thumbnail || first.image || `https://i.ytimg.com/vi/${resolvedId}/hqdefault.jpg`,
+        duration: first.timestamp || first.duration?.timestamp || '',
+        author: first.author?.name || 'YouTube'
     };
 }
 
@@ -90,7 +136,7 @@ async function fetchYoutubeStreamUrl(youtubeUrl, mode) {
             YT_PARI_API_URL,
             { url: youtubeUrl },
             {
-                timeout: 25000,
+                timeout: 22000,
                 headers: {
                     'Content-Type': 'application/json',
                     Accept: 'application/json',
@@ -131,7 +177,7 @@ async function fetchYoutubeStreamUrl(youtubeUrl, mode) {
                 vCodec: 'h264'
             });
             const convRes = await axios.post(CNV_CONVERTER_URL, body.toString(), {
-                timeout: 30000,
+                timeout: 28000,
                 headers: {
                     ...CNV_HEADERS,
                     'content-type': 'application/x-www-form-urlencoded',
@@ -147,7 +193,36 @@ async function fetchYoutubeStreamUrl(youtubeUrl, mode) {
         console.warn('[media] cnv.cx fallback failed:', err.message);
     }
 
-    throw new Error(`Could not extract downloadable ${mode === 'audio' ? 'MP3' : 'MP4'} stream.`);
+    // 3. Fallback: GiftedTech / NexOracle / DavidCyril MP3 & MP4 APIs
+    const extraEndpoints = mode === 'audio'
+        ? [
+            `https://api.giftedtech.web.id/api/download/dlmp3?apikey=gifted&url=${encodeURIComponent(youtubeUrl)}`,
+            `https://api.nexoracle.com/downloader/yt-audio2?apikey=free_key@maher_apis&url=${encodeURIComponent(youtubeUrl)}`,
+            `https://apis.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(youtubeUrl)}`
+        ]
+        : [
+            `https://api.giftedtech.web.id/api/download/dlmp4?apikey=gifted&url=${encodeURIComponent(youtubeUrl)}`,
+            `https://api.nexoracle.com/downloader/yt-video2?apikey=free_key@maher_apis&url=${encodeURIComponent(youtubeUrl)}`,
+            `https://apis.davidcyriltech.my.id/download/ytmp4?url=${encodeURIComponent(youtubeUrl)}`
+        ];
+
+    for (const ep of extraEndpoints) {
+        try {
+            const res = await axios.get(ep, {
+                timeout: 22000,
+                headers: { 'User-Agent': MOBILE_UA, Accept: 'application/json' }
+            });
+            const d = res.data?.result || res.data?.data || res.data || {};
+            const dlUrl = d.download_url || d.downloadUrl || d.audio || d.video || d.url || d.link || '';
+            if (typeof dlUrl === 'string' && /^https?:\/\//i.test(dlUrl)) {
+                return { url: dlUrl, headers: {} };
+            }
+        } catch (err) {
+            console.warn('[media] Extra YT fallback failed:', err.message);
+        }
+    }
+
+    throw new Error(`Could not extract downloadable ${mode === 'audio' ? 'MP3' : 'MP4'} stream from link.`);
 }
 
 async function resolveTikTokVideo(url) {
@@ -253,6 +328,24 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
     }
 
     if (resolved === 'song') {
+        // Direct audio file URL (.mp3, .m4a, .ogg, .wav)
+        if (isDirectAudioUrl(cleanQuery)) {
+            const { buffer, contentType } = await downloadBufferFromUrl(cleanQuery);
+            const rawName = decodeURIComponent(cleanQuery.split('/').pop()?.split('?')[0] || 'song.mp3');
+            const title = rawName.replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[_-]+/g, ' ').trim() || 'Song';
+            return {
+                platform: 'song',
+                mediaType: 'audio',
+                title,
+                baileysPayload: {
+                    audio: buffer,
+                    mimetype: /audio\//i.test(contentType) ? contentType.split(';')[0] : 'audio/mpeg',
+                    ptt: false,
+                    fileName: `${title.replace(/[^\w\s-]/g, '').slice(0, 60) || 'song'}.mp3`
+                }
+            };
+        }
+
         const yt = await resolveYoutubeInfo(cleanQuery);
         const stream = await fetchYoutubeStreamUrl(yt.url, 'audio');
         const { buffer } = await downloadBufferFromUrl(stream.url, stream.headers);
@@ -260,6 +353,10 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
             platform: 'song',
             mediaType: 'audio',
             title: yt.title,
+            videoId: yt.videoId,
+            duration: yt.duration,
+            author: yt.author,
+            thumbnail: yt.thumbnail,
             baileysPayload: {
                 audio: buffer,
                 mimetype: 'audio/mpeg',
@@ -284,6 +381,10 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
             platform: 'video',
             mediaType: 'video',
             title: yt.title,
+            videoId: yt.videoId,
+            duration: yt.duration,
+            author: yt.author,
+            thumbnail: yt.thumbnail,
             baileysPayload: videoPayload
         };
     }

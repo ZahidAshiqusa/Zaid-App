@@ -59,6 +59,32 @@ class ChatRepository(
         safeCall { api().getChatMessages(numberOrJid) }
     }
 
+    suspend fun getChatPresence(jid: String): Result<PresenceResponse> = withContext(Dispatchers.IO) {
+        safeCall { api().getChatPresence(jid) }
+    }
+
+    suspend fun loadOlderChats(
+        jid: String = "",
+        oldestMsgId: String = "",
+        oldestTimestamp: Long = 0L,
+        fromMe: Boolean = false
+    ): Result<LoadOlderChatsResponse> = withContext(Dispatchers.IO) {
+        safeCall {
+            api().loadOlderChats(
+                LoadOlderChatsRequest(
+                    jid = jid,
+                    oldestMsgId = oldestMsgId,
+                    oldestTimestamp = oldestTimestamp,
+                    fromMe = fromMe
+                )
+            )
+        }
+    }
+
+    suspend fun lookupNumber(number: String): Result<NumberLookupResponse> = withContext(Dispatchers.IO) {
+        safeCall { api().lookupNumber(number) }
+    }
+
     suspend fun getGroups(): Result<GroupsListResponse> = withContext(Dispatchers.IO) {
         safeCall { api().getGroups() }
     }
@@ -79,7 +105,8 @@ class ChatRepository(
         recipient: String,
         platform: String,
         query: String,
-        caption: String = ""
+        caption: String = "",
+        withButtons: Boolean = true
     ): Result<DownloadAndSendResponse> = withContext(Dispatchers.IO) {
         safeCall {
             api().downloadAndSendMedia(
@@ -87,7 +114,8 @@ class ChatRepository(
                     recipient = recipient,
                     platform = platform,
                     query = query,
-                    caption = caption
+                    caption = caption,
+                    withButtons = withButtons
                 )
             )
         }

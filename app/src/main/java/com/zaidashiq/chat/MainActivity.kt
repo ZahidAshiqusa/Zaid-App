@@ -1,9 +1,13 @@
 package com.zaidashiq.chat
 
+import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -11,12 +15,14 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -25,13 +31,20 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.zaidashiq.chat.ui.navigation.*
 import com.zaidashiq.chat.ui.screens.*
+import com.zaidashiq.chat.ui.theme.GlassCardElevated
+import com.zaidashiq.chat.ui.theme.NeonMintAccent
+import com.zaidashiq.chat.ui.theme.ObsidianBase
+import com.zaidashiq.chat.ui.theme.TextPrimary
 import com.zaidashiq.chat.ui.theme.ZaidAshiqChatTheme
 import com.zaidashiq.chat.ui.viewmodel.MainViewModel
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+        )
         setContent {
             ZaidAshiqChatTheme {
                 ZaidAshiqChatApp()
@@ -47,6 +60,7 @@ fun ZaidAshiqChatApp(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showSplash by remember { mutableStateOf(true) }
 
     LaunchedEffect(uiState.snackbarMessage) {
         val msg = uiState.snackbarMessage
@@ -57,23 +71,38 @@ fun ZaidAshiqChatApp(
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
+        containerColor = ObsidianBase,
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    containerColor = GlassCardElevated,
+                    contentColor = TextPrimary,
+                    actionColor = NeonMintAccent,
+                    shape = RoundedCornerShape(16.dp)
+                )
+            }
+        }
     ) { _ ->
         Box(modifier = Modifier.fillMaxSize()) {
             NavHost(
                 navController = navController,
                 startDestination = if (uiState.isLinked) HomeRoute else PairingRoute,
                 enterTransition = {
-                    slideInHorizontally(initialOffsetX = { it / 4 }, animationSpec = tween(260)) + fadeIn(tween(240))
+                    slideInHorizontally(initialOffsetX = { it / 5 }, animationSpec = tween(220, easing = FastOutSlowInEasing)) +
+                        fadeIn(tween(200, easing = FastOutSlowInEasing))
                 },
                 exitTransition = {
-                    slideOutHorizontally(targetOffsetX = { -it / 6 }, animationSpec = tween(220)) + fadeOut(tween(180))
+                    slideOutHorizontally(targetOffsetX = { -it / 6 }, animationSpec = tween(180, easing = FastOutSlowInEasing)) +
+                        fadeOut(tween(160, easing = FastOutSlowInEasing))
                 },
                 popEnterTransition = {
-                    slideInHorizontally(initialOffsetX = { -it / 5 }, animationSpec = tween(240)) + fadeIn(tween(220))
+                    slideInHorizontally(initialOffsetX = { -it / 5 }, animationSpec = tween(200, easing = FastOutSlowInEasing)) +
+                        fadeIn(tween(180, easing = FastOutSlowInEasing))
                 },
                 popExitTransition = {
-                    slideOutHorizontally(targetOffsetX = { it / 4 }, animationSpec = tween(220)) + fadeOut(tween(180))
+                    slideOutHorizontally(targetOffsetX = { it / 5 }, animationSpec = tween(180, easing = FastOutSlowInEasing)) +
+                        fadeOut(tween(160, easing = FastOutSlowInEasing))
                 }
             ) {
                 composable<PairingRoute> {
@@ -102,6 +131,7 @@ fun ZaidAshiqChatApp(
                         onToggleSearch = viewModel::toggleSearch,
                         onSearchChange = viewModel::updateSearchQuery,
                         onRefresh = viewModel::loadAllHomeData,
+                        onLoadOlderChats = viewModel::loadOlderChatsList,
                         onOpenChat = { jid, name, phone ->
                             navController.navigate(ChatRoute(jid = jid, name = name, phone = phone))
                         },
@@ -127,6 +157,7 @@ fun ZaidAshiqChatApp(
                     ChatScreen(
                         recipientJid = route.jid,
                         recipientName = route.name,
+                        recipientPhone = route.phone,
                         uiState = uiState,
                         onBack = { navController.popBackStack() },
                         onSendText = { text -> viewModel.sendTextMessage(route.jid, text) },
@@ -148,7 +179,10 @@ fun ZaidAshiqChatApp(
                         onSendRecordedVoice = { file, done -> viewModel.sendRecordedVoiceFile(route.jid, file, done) },
                         onSendFakeLocation = { lat, lng, dur, label, done ->
                             viewModel.sendFakeLocation(route.jid, lat, lng, dur, label, done)
-                        }
+                        },
+                        onLookupNumber = viewModel::lookupNumberDetails,
+                        onClearNumberLookup = viewModel::clearNumberLookup,
+                        onLoadOlderMessages = { viewModel.loadOlderMessages(route.jid) }
                     )
                 }
 
@@ -218,6 +252,16 @@ fun ZaidAshiqChatApp(
                         }
                     )
                 }
+            }
+
+            // Animated Fading-Up Startup Splash Screen Overlay
+            AnimatedVisibility(
+                visible = showSplash,
+                exit = fadeOut(tween(320, easing = FastOutSlowInEasing))
+            ) {
+                SplashScreen(
+                    onFinished = { showSplash = false }
+                )
             }
         }
     }

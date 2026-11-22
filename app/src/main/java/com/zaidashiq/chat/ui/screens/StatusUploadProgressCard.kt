@@ -6,6 +6,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -19,7 +20,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -42,47 +42,17 @@ fun StatusUploadProgressCard(
 ) {
     AnimatedVisibility(
         visible = progress.isVisible,
-        enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically(),
+        enter = fadeIn(tween(200, easing = FastOutSlowInEasing)) + expandVertically(tween(220, easing = FastOutSlowInEasing)),
+        exit = fadeOut(tween(180, easing = FastOutSlowInEasing)) + shrinkVertically(tween(180, easing = FastOutSlowInEasing)),
         modifier = modifier
     ) {
         val infiniteTransition = rememberInfiniteTransition(label = "status_upload_pulse")
 
-        // Breathing halo scale & alpha for the leading media icon
-        val haloScale by infiniteTransition.animateFloat(
-            initialValue = 1.0f,
-            targetValue = 1.42f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1150, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "halo_scale"
-        )
-        val haloAlpha by infiniteTransition.animateFloat(
-            initialValue = 0.45f,
-            targetValue = 0.0f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1150, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "halo_alpha"
-        )
-
-        // Pulsing brightness & sweep across the progress bar to indicate active network/server processing
-        val barPulseAlpha by infiniteTransition.animateFloat(
-            initialValue = 0.72f,
-            targetValue = 1.0f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 750, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "bar_pulse_alpha"
-        )
         val shimmerSweep by infiniteTransition.animateFloat(
             initialValue = -0.35f,
             targetValue = 1.35f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1350, easing = LinearEasing),
+                animation = tween(durationMillis = 1400, easing = LinearEasing),
                 repeatMode = RepeatMode.Restart
             ),
             label = "bar_shimmer_sweep"
@@ -90,21 +60,21 @@ fun StatusUploadProgressCard(
 
         val animatedFraction by animateFloatAsState(
             targetValue = when (progress.stage) {
-                UploadStage.PREPARING -> 0.12f
+                UploadStage.PREPARING -> 0.14f
                 UploadStage.UPLOADING -> (progress.fraction ?: 0.35f).coerceIn(0.08f, 0.96f)
                 UploadStage.PROCESSING -> 1.0f
                 UploadStage.COMPLETED -> 1.0f
                 UploadStage.FAILED -> (progress.fraction ?: 0.3f).coerceIn(0.1f, 1f)
                 UploadStage.IDLE -> 0f
             },
-            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+            animationSpec = tween(260, easing = FastOutSlowInEasing),
             label = "upload_progress_fraction"
         )
 
         val accentColor = when (progress.stage) {
-            UploadStage.COMPLETED -> WhatsAppGreen
+            UploadStage.COMPLETED -> NeonMintAccent
             UploadStage.FAILED -> ErrorCoral
-            else -> DeepEmerald
+            else -> EmeraldGlow
         }
 
         val mediaIcon = when (progress.mediaType) {
@@ -114,10 +84,11 @@ fun StatusUploadProgressCard(
             else -> Icons.Rounded.CloudUpload
         }
 
-        ElevatedCard(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.elevatedCardColors(containerColor = SurfacePureWhite),
-            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp),
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = GlassCardSurface,
+            border = BorderStroke(1.dp, accentColor.copy(alpha = 0.42f)),
+            shadowElevation = 4.dp,
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("status_upload_progress_card")
@@ -131,38 +102,23 @@ fun StatusUploadProgressCard(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Pulsing icon indicator
                     Box(
-                        modifier = Modifier.size(44.dp),
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(accentColor.copy(alpha = 0.16f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (progress.isActive) {
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .scale(haloScale)
-                                    .clip(CircleShape)
-                                    .background(OnlineMint.copy(alpha = haloAlpha))
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(accentColor.copy(alpha = 0.14f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = when (progress.stage) {
-                                    UploadStage.COMPLETED -> Icons.Rounded.CheckCircle
-                                    UploadStage.FAILED -> Icons.Rounded.ErrorOutline
-                                    else -> mediaIcon
-                                },
-                                contentDescription = progress.mediaLabel,
-                                tint = accentColor,
-                                modifier = Modifier.size(21.dp)
-                            )
-                        }
+                        Icon(
+                            imageVector = when (progress.stage) {
+                                UploadStage.COMPLETED -> Icons.Rounded.CheckCircle
+                                UploadStage.FAILED -> Icons.Rounded.ErrorOutline
+                                else -> mediaIcon
+                            },
+                            contentDescription = progress.mediaLabel,
+                            tint = accentColor,
+                            modifier = Modifier.size(21.dp)
+                        )
                     }
 
                     Spacer(Modifier.width(12.dp))
@@ -238,41 +194,30 @@ fun StatusUploadProgressCard(
 
                 Spacer(Modifier.height(10.dp))
 
-                // Custom Pulse-Animated Progress Bar Track
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(10.dp)
+                        .height(8.dp)
                         .clip(RoundedCornerShape(50))
                         .testTag("status_upload_progress_bar")
                 ) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val radius = CornerRadius(size.height / 2f, size.height / 2f)
 
-                        // Subtle track background
                         drawRoundRect(
-                            color = SoftSagePill.copy(alpha = 0.65f),
+                            color = GlassCardElevated,
                             size = size,
                             cornerRadius = radius
                         )
 
                         val fillWidth = (size.width * animatedFraction).coerceAtLeast(size.height)
-                        val activeAlpha = if (progress.isActive) barPulseAlpha else 1.0f
 
-                        // Base gradient fill with breathing pulse alpha
                         val fillBrush = when (progress.stage) {
                             UploadStage.FAILED -> Brush.horizontalGradient(
                                 listOf(ErrorCoral.copy(alpha = 0.85f), ErrorCoral)
                             )
-                            UploadStage.COMPLETED -> Brush.horizontalGradient(
-                                listOf(DeepEmerald, OnlineMint)
-                            )
                             else -> Brush.horizontalGradient(
-                                listOf(
-                                    DeepEmerald.copy(alpha = activeAlpha),
-                                    WhatsAppGreen.copy(alpha = activeAlpha),
-                                    OnlineMint.copy(alpha = activeAlpha)
-                                )
+                                listOf(EmeraldGlow, OnlineMint, NeonMintAccent)
                             )
                         }
 
@@ -282,14 +227,13 @@ fun StatusUploadProgressCard(
                             cornerRadius = radius
                         )
 
-                        // Luminous pulse wave sweeping across active fill during upload/processing
                         if (progress.isActive) {
                             val sweepCenter = size.width * shimmerSweep
                             val sweepHalfWidth = size.width * 0.22f
                             val waveBrush = Brush.horizontalGradient(
                                 colors = listOf(
                                     Color.Transparent,
-                                    Color.White.copy(alpha = 0.55f),
+                                    Color.White.copy(alpha = 0.45f),
                                     Color.Transparent
                                 ),
                                 startX = sweepCenter - sweepHalfWidth,

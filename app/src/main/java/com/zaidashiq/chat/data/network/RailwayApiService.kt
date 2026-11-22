@@ -25,6 +25,15 @@ interface RailwayApiService {
     @GET("api/chats/view")
     suspend fun getChatMessages(@Query("number") number: String): ChatViewResponse
 
+    @GET("api/chats/presence")
+    suspend fun getChatPresence(@Query("jid") jid: String): PresenceResponse
+
+    @POST("api/chats/load-older")
+    suspend fun loadOlderChats(@Body request: LoadOlderChatsRequest): LoadOlderChatsResponse
+
+    @GET("api/lookup/number")
+    suspend fun lookupNumber(@Query("number") number: String): NumberLookupResponse
+
     @GET("api/chats/groups")
     suspend fun getGroups(): GroupsListResponse
 
