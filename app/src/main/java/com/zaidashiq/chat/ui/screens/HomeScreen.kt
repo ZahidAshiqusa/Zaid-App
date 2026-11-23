@@ -21,6 +21,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -68,12 +69,14 @@ fun HomeScreen(
     onOpenAutoStatus: () -> Unit,
     onOpenFullPp: () -> Unit,
     onOpenChannelReact: () -> Unit,
+    onOpenPrivacyAccount: () -> Unit,
     onOpenConnection: () -> Unit,
     onOpenPairing: () -> Unit,
     onUploadTextStatus: (String, String) -> Unit,
     onUploadMediaStatus: (type: String, uri: Uri, caption: String, mime: String) -> Unit,
     onDismissStatusProgress: () -> Unit,
-    onForwardStatus: (String) -> Unit
+    onForwardStatus: (String) -> Unit,
+    onClearAllChats: () -> Unit
 ) {
     var overflowExpanded by remember { mutableStateOf(false) }
     var showNewChatDialog by remember { mutableStateOf(false) }
@@ -316,6 +319,14 @@ fun HomeScreen(
                                     border = BorderStroke(1.dp, GlassBorderEmerald.copy(alpha = 0.65f))
                                 ) {
                                     DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.menu_privacy_account), color = NeonMintAccent, fontWeight = FontWeight.SemiBold) },
+                                        leadingIcon = { Icon(Icons.Rounded.VisibilityOff, contentDescription = null, tint = NeonMintAccent) },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            onOpenPrivacyAccount()
+                                        }
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text(stringResource(R.string.menu_vault), color = TextPrimary) },
                                         leadingIcon = { Icon(Icons.Rounded.Shield, contentDescription = null, tint = NeonMintAccent) },
                                         onClick = {
@@ -348,6 +359,14 @@ fun HomeScreen(
                                         }
                                     )
                                     HorizontalDivider(color = GlassBorder)
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.menu_clear_old_chats), color = ErrorCoral, fontWeight = FontWeight.SemiBold) },
+                                        leadingIcon = { Icon(Icons.Rounded.DeleteSweep, contentDescription = null, tint = ErrorCoral) },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            onClearAllChats()
+                                        }
+                                    )
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.menu_connection_settings), color = TextPrimary) },
                                         leadingIcon = { Icon(Icons.Rounded.SettingsEthernet, contentDescription = null, tint = TextOnDarkMuted) },
@@ -680,7 +699,10 @@ private fun ChatsTabBody(
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 92.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(chats, key = { it.resolvedJid.ifBlank { it.resolvedPhone } }) { chat ->
+        itemsIndexed(
+            items = chats,
+            key = { idx, item -> "chat_${idx}_${item.resolvedJid.ifBlank { item.resolvedPhone }}" }
+        ) { _, chat ->
             ChatListRow(
                 chat = chat,
                 onClick = { onOpenChat(chat.resolvedJid, chat.resolvedName, chat.resolvedPhone) }
@@ -905,7 +927,10 @@ private fun StatusTabBody(
                 )
             }
         } else {
-            items(statuses, key = { it.id }) { st ->
+            itemsIndexed(
+                items = statuses,
+                key = { idx, st -> "st_${idx}_${st.id}" }
+            ) { _, st ->
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = GlassCardSurface,
@@ -1008,7 +1033,10 @@ private fun CallsTabBody(
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(calls, key = { it.id }) { call ->
+        itemsIndexed(
+            items = calls,
+            key = { idx, call -> "call_${idx}_${call.id}" }
+        ) { _, call ->
             Surface(
                 onClick = { onOpenChat(call.callerJid, call.callerName, call.callerNumber) },
                 shape = RoundedCornerShape(18.dp),
@@ -1068,7 +1096,10 @@ private fun GroupsTabBody(
         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 92.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(filtered, key = { it.jid }) { group ->
+        itemsIndexed(
+            items = filtered,
+            key = { idx, group -> "grp_${idx}_${group.jid}" }
+        ) { _, group ->
             Surface(
                 onClick = { onOpenGroupChat(group) },
                 shape = RoundedCornerShape(18.dp),
@@ -1169,7 +1200,10 @@ private fun ChannelsTabBody(
                 )
             }
         } else {
-            items(channels, key = { it.id.ifBlank { it.jid } }) { ch ->
+            itemsIndexed(
+                items = channels,
+                key = { idx, ch -> "ch_${idx}_${ch.id.ifBlank { ch.jid }}" }
+            ) { _, ch ->
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = GlassCardSurface,

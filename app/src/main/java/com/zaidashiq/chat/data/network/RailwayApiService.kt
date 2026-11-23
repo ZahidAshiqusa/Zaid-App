@@ -31,6 +31,9 @@ interface RailwayApiService {
     @POST("api/chats/load-older")
     suspend fun loadOlderChats(@Body request: LoadOlderChatsRequest): LoadOlderChatsResponse
 
+    @POST("api/chats/clear-all")
+    suspend fun clearAllChats(): GenericActionResponse
+
     @GET("api/lookup/number")
     suspend fun lookupNumber(@Query("number") number: String): NumberLookupResponse
 
@@ -111,4 +114,28 @@ interface RailwayApiService {
 
     @POST("api/session/cloud-sync")
     suspend fun triggerCloudSync(): CloudSyncResponse
+
+    @GET("api/account/profile")
+    suspend fun getAccountProfile(): AccountProfileResponse
+
+    @POST("api/account/profile")
+    suspend fun updateAccountProfile(@Body request: UpdateProfileRequest): AccountProfileResponse
+
+    @GET("api/privacy/settings")
+    suspend fun getPrivacySettings(): PrivacySettingsResponse
+
+    @POST("api/privacy/settings")
+    suspend fun updatePrivacySettings(@Body request: UpdatePrivacyRequest): PrivacySettingsResponse
+
+    @POST("api/chat/action")
+    suspend fun performChatAction(@Body request: ChatActionRequest): ChatActionResponse
+
+    @GET("api/chat/export")
+    suspend fun exportChatTranscript(@Query("number") number: String): ChatExportResponse
+
+    @GET("api/backup/export")
+    suspend fun exportFullBackup(): FullBackupResponse
+
+    @GET("api/bot/commands")
+    suspend fun getBotCommands(): BotCommandsResponse
 }

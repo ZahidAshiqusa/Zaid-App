@@ -15,7 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -199,7 +199,10 @@ fun MediaDownloadSheet(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(giphyResults, key = { it.id }) { gif ->
+                        itemsIndexed(
+                            items = giphyResults,
+                            key = { idx, gif -> "gif_${idx}_${gif.id}" }
+                        ) { _, gif ->
                             Box(
                                 modifier = Modifier
                                     .aspectRatio(1f)

@@ -139,12 +139,14 @@ fun ZaidAshiqChatApp(
                         onOpenAutoStatus = { navController.navigate(AutoStatusRoute) },
                         onOpenFullPp = { navController.navigate(FullProfilePicRoute) },
                         onOpenChannelReact = { navController.navigate(ChannelReactRoute) },
+                        onOpenPrivacyAccount = { navController.navigate(PrivacyAccountRoute) },
                         onOpenConnection = { navController.navigate(ConnectionRoute) },
                         onOpenPairing = { navController.navigate(PairingRoute) },
                         onUploadTextStatus = viewModel::uploadTextStatus,
                         onUploadMediaStatus = viewModel::uploadMediaStatus,
                         onDismissStatusProgress = viewModel::dismissStatusUploadProgress,
-                        onForwardStatus = viewModel::forwardCapturedStatus
+                        onForwardStatus = viewModel::forwardCapturedStatus,
+                        onClearAllChats = viewModel::clearAllOldChats
                     )
                 }
 
@@ -182,7 +184,20 @@ fun ZaidAshiqChatApp(
                         },
                         onLookupNumber = viewModel::lookupNumberDetails,
                         onClearNumberLookup = viewModel::clearNumberLookup,
-                        onLoadOlderMessages = { viewModel.loadOlderMessages(route.jid) }
+                        onSendNumberDetailsToChat = { details ->
+                            viewModel.shareNumberDetailsToChat(route.jid, details)
+                        },
+                        onLoadOlderMessages = { viewModel.loadOlderMessages(route.jid) },
+                        onOpenPrivacyAccount = { navController.navigate(PrivacyAccountRoute) },
+                        onOpenFullDp = { navController.navigate(FullProfilePicRoute) },
+                        onChatAction = { action, value ->
+                            viewModel.performChatAction(route.jid, action, value)
+                        },
+                        onExportChatBackup = {
+                            viewModel.exportChatTranscript(route.jid, route.name)
+                        },
+                        onDismissBackupDialog = viewModel::clearExportedBackup,
+                        onLoadBotCommands = viewModel::loadBotCommands
                     )
                 }
 
@@ -250,6 +265,25 @@ fun ZaidAshiqChatApp(
                                 popUpTo(0) { inclusive = true }
                             }
                         }
+                    )
+                }
+
+                composable<PrivacyAccountRoute> {
+                    PrivacyAccountScreen(
+                        uiState = uiState,
+                        onBack = { navController.popBackStack() },
+                        onLoad = viewModel::loadAccountAndPrivacy,
+                        onUpdateName = viewModel::updateProfileName,
+                        onUpdateAbout = viewModel::updateProfileAbout,
+                        onUpdateGhostPrivacy = viewModel::updateGhostPrivacy,
+                        onUpdateNativePrivacy = viewModel::updateNativePrivacy,
+                        onOpenFullDp = { navController.navigate(FullProfilePicRoute) },
+                        onOpenVault = { navController.navigate(VaultRoute) },
+                        onOpenAutoStatus = { navController.navigate(AutoStatusRoute) },
+                        onTriggerCloudSync = viewModel::triggerCloudSync,
+                        onExportFullBackup = viewModel::exportFullBackup,
+                        onClearAllChats = viewModel::clearAllOldChats,
+                        onDismissBackupDialog = viewModel::clearExportedBackup
                     )
                 }
             }

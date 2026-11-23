@@ -19,6 +19,20 @@ function detectPakOperator(digits) {
     return 'Pakistan Mobile';
 }
 
+function detectCountryFromPrefix(international) {
+    const d = String(international || '');
+    if (d.startsWith('92')) return 'Pakistan (PK)';
+    if (d.startsWith('91')) return 'India (IN)';
+    if (d.startsWith('971')) return 'United Arab Emirates (AE)';
+    if (d.startsWith('966')) return 'Saudi Arabia (SA)';
+    if (d.startsWith('44')) return 'United Kingdom (GB)';
+    if (d.startsWith('1')) return 'United States / Canada';
+    if (d.startsWith('90')) return 'Turkey (TR)';
+    if (d.startsWith('93')) return 'Afghanistan (AF)';
+    if (d.startsWith('880')) return 'Bangladesh (BD)';
+    return '';
+}
+
 function normalizeFormats(rawInput) {
     let digits = String(rawInput || '').replace(/\D/g, '');
     if (digits.startsWith('00')) digits = digits.slice(2);
@@ -30,6 +44,9 @@ function normalizeFormats(rawInput) {
     } else if (digits.startsWith('92') && digits.length === 12) {
         international = digits;
         localPak = '0' + digits.slice(2);
+    } else if (digits.startsWith('3') && digits.length === 10) {
+        international = '92' + digits;
+        localPak = '0' + digits;
     }
     const shortTen = international.startsWith('92') && international.length === 12
         ? international.slice(2)
@@ -64,7 +81,7 @@ async function queryTruecaller({ international, localPak }) {
         });
     }
 
-    // 3. Public Truecaller lookup APIs used in Queen-Riam / WhatsApp suites
+    // 3. Public caller-ID lookup endpoints
     candidates.push(
         {
             url: `https://api.nexoracle.com/details/truecaller?apikey=free_key@maher_apis&q=${encodeURIComponent(international)}`,
@@ -77,14 +94,18 @@ async function queryTruecaller({ international, localPak }) {
         {
             url: `https://api.giftedtech.web.id/api/tools/truecaller?apikey=gifted&number=${encodeURIComponent(international)}`,
             headers: { 'User-Agent': UA, Accept: 'application/json' }
+        },
+        {
+            url: `https://api.siputzx.my.id/api/tools/truecaller?number=${encodeURIComponent(international)}`,
+            headers: { 'User-Agent': UA, Accept: 'application/json' }
         }
     );
 
     for (const req of candidates) {
         try {
-            const res = await axios.get(req.url, { headers: req.headers, timeout: 10000 });
+            const res = await axios.get(req.url, { headers: req.headers, timeout: 9000 });
             const raw = res.data;
-            const node = raw?.result || raw?.data?.[0] || raw?.data || raw;
+            const node = Array.isArray(raw?.data) ? raw.data[0] : (raw?.result || raw?.data || raw);
             if (!node || typeof node !== 'object') continue;
 
             const name =
@@ -104,7 +125,7 @@ async function queryTruecaller({ international, localPak }) {
                 node.country ||
                 node.countryCode ||
                 node.addresses?.[0]?.countryCode ||
-                (international.startsWith('92') ? 'Pakistan (PK)' : '');
+                detectCountryFromPrefix(international);
             const address =
                 node.address ||
                 node.city ||
@@ -118,7 +139,7 @@ async function queryTruecaller({ international, localPak }) {
             const spamScore =
                 node.spamScore !== undefined ? String(node.spamScore) : '';
 
-            if (name || address || email || carrier) {
+            if (name || address || email) {
                 return {
                     found: Boolean(name),
                     name: String(name || '').trim(),
@@ -138,14 +159,44 @@ async function queryTruecaller({ international, localPak }) {
         found: false,
         name: '',
         carrier: detectPakOperator(localPak),
-        country: international.startsWith('92') ? 'Pakistan (PK)' : '',
+        country: detectCountryFromPrefix(international),
         address: '',
         email: '',
         spamScore: ''
     };
 }
 
+function parseHtmlSimFallback(html, fallbackNetwork) {
+    if (typeof html !== 'string' || html.length < 20) return [];
+    const stripped = html
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '');
+    const records = [];
+    const nameMatch = stripped.match(/(?:Name|Owner)\s*[:<\s][^>]*>\s*([^<\n]{2,60})/i);
+    const cnicMatch = stripped.match(/(?:CNIC|ID)\s*[:<\s][^>]*>\s*([0-9-]{13,15})/i);
+    const addrMatch = stripped.match(/(?:Address|City)\s*[:<\s][^>]*>\s*([^<\n]{3,120})/i);
+    const numMatch = stripped.match(/(?:Number|Mobile|Phone)\s*[:<\s][^>]*>\s*([0-9+]{10,14})/i);
+    if (nameMatch || cnicMatch || addrMatch) {
+        records.push({
+            name: (nameMatch?.[1] || '').trim(),
+            number: (numMatch?.[1] || '').trim(),
+            cnic: (cnicMatch?.[1] || '').trim(),
+            address: (addrMatch?.[1] || '').trim(),
+            network: fallbackNetwork || ''
+        });
+    }
+    return records;
+}
+
 function normalizeSimRecords(payload, fallbackNetwork) {
+    if (typeof payload === 'string') {
+        try {
+            const parsed = JSON.parse(payload);
+            return normalizeSimRecords(parsed, fallbackNetwork);
+        } catch (_) {
+            return parseHtmlSimFallback(payload, fallbackNetwork);
+        }
+    }
     let list = [];
     if (Array.isArray(payload)) {
         list = payload;
@@ -205,13 +256,13 @@ async function querySimDatabase({ localPak, shortTen, digits }) {
 
     for (const ep of endpoints) {
         try {
-            const res = await axios.get(ep.url, { headers: ep.headers, timeout: 10000 });
+            const res = await axios.get(ep.url, { headers: ep.headers, timeout: 9000 });
             const records = normalizeSimRecords(res.data, fallbackNetwork);
             if (records.length > 0) {
                 return { found: true, records };
             }
         } catch (_) {
-            // Try next SIM DB API
+            // Try next API
         }
     }
 
@@ -221,15 +272,22 @@ async function querySimDatabase({ localPak, shortTen, digits }) {
 async function lookupNumberDetails(rawNumber, sock, store) {
     const formats = normalizeFormats(rawNumber);
     if (!formats.international || formats.international.length < 7) {
-        throw new Error('Please provide a valid phone number or CNIC.');
+        throw new Error('Please provide a valid phone number.');
     }
 
     const jid = `${formats.international}@s.whatsapp.net`;
 
-    // Query Truecaller, SIM Database, and WhatsApp profile in parallel for speed
     const [truecaller, simDb, waInfo] = await Promise.all([
-        queryTruecaller(formats),
-        querySimDatabase(formats),
+        queryTruecaller(formats).catch(() => ({
+            found: false,
+            name: '',
+            carrier: detectPakOperator(formats.localPak),
+            country: detectCountryFromPrefix(formats.international),
+            address: '',
+            email: '',
+            spamScore: ''
+        })),
+        querySimDatabase(formats).catch(() => ({ found: false, records: [] })),
         (async () => {
             const info = {
                 registered: false,
@@ -248,6 +306,14 @@ async function lookupNumberDetails(rawNumber, sock, store) {
                 if (typeof sock.fetchStatus === 'function') {
                     const st = await sock.fetchStatus(jid);
                     info.about = String(st?.status || st?.[0]?.status?.status || '').trim();
+                }
+            } catch (_) {}
+            try {
+                if (typeof sock.getBusinessProfile === 'function') {
+                    const biz = await sock.getBusinessProfile(jid);
+                    if (biz?.description && !info.about) {
+                        info.about = String(biz.description).trim();
+                    }
                 }
             } catch (_) {}
             try {
@@ -271,7 +337,47 @@ async function lookupNumberDetails(rawNumber, sock, store) {
     };
 }
 
+function formatNumberDetailsForChat(details) {
+    const lines = [];
+    lines.push(`*Number Details Report*`);
+    lines.push(`Phone: ${details.formattedNumber}`);
+    if (details.localNumber && details.localNumber !== details.query) {
+        lines.push(`Local: ${details.localNumber}`);
+    }
+    if (details.operator) {
+        lines.push(`Operator: ${details.operator}`);
+    }
+    const tc = details.truecaller || {};
+    if (tc.name) lines.push(`Truecaller Name: ${tc.name}`);
+    if (tc.country) lines.push(`Country: ${tc.country}`);
+    if (tc.address) lines.push(`Location: ${tc.address}`);
+    if (tc.email) lines.push(`Email: ${tc.email}`);
+
+    const wa = details.whatsapp || {};
+    lines.push(`WhatsApp: ${wa.registered ? 'Registered' : 'Not verified / Private'}`);
+    if (wa.contactName && wa.contactName !== details.formattedNumber) {
+        lines.push(`Saved Contact: ${wa.contactName}`);
+    }
+    if (wa.about) lines.push(`WhatsApp About: ${wa.about}`);
+
+    if (Array.isArray(details.simRecords) && details.simRecords.length > 0) {
+        lines.push('');
+        lines.push(`*SIM Database Records (${details.simRecords.length})*`);
+        details.simRecords.slice(0, 5).forEach((rec, idx) => {
+            const parts = [
+                rec.name ? `Name: ${rec.name}` : '',
+                rec.cnic ? `CNIC: ${rec.cnic}` : '',
+                rec.network ? `Network: ${rec.network}` : '',
+                rec.address ? `Address: ${rec.address}` : ''
+            ].filter(Boolean);
+            if (parts.length) lines.push(`${idx + 1}. ${parts.join(' | ')}`);
+        });
+    }
+    return lines.join('\n');
+}
+
 module.exports = {
     lookupNumberDetails,
+    formatNumberDetailsForChat,
     detectPakOperator
 };

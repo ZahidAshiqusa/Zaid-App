@@ -295,8 +295,8 @@ class BaileysManager {
             generateHighQualityLinkPreview: false,
             // STEALTH MODE: NEVER broadcast "online" presence when connected!
             markOnlineOnConnect: false,
-            // Enable full history sync to load older chats & messages
-            syncFullHistory: true,
+            // Do not auto-flood old historical chats; new chats & messages save locally on device
+            syncFullHistory: false,
             connectTimeoutMs: 45000,
             defaultQueryTimeoutMs: 45000,
             keepAliveIntervalMs: 25000,
@@ -308,7 +308,8 @@ class BaileysManager {
     }
 
     _keepStealthUnavailable(sock) {
-        if (sock && typeof sock.sendPresenceUpdate === 'function') {
+        const freeze = store.state.ghostPrivacy?.freezeOnlinePresence !== false;
+        if (freeze && sock && typeof sock.sendPresenceUpdate === 'function') {
             sock.sendPresenceUpdate('unavailable').catch(() => {});
         }
     }
@@ -478,6 +479,12 @@ class BaileysManager {
                 entry.reconnecting = false;
                 console.log(`[baileys] WhatsApp session +${cleanNumber} connected in stealth mode (offline presence).`);
                 this._keepStealthUnavailable(sock);
+                if (entry.stealthTimer) clearInterval(entry.stealthTimer);
+                entry.stealthTimer = setInterval(() => {
+                    if (entry.connected && entry.sock === sock) {
+                        this._keepStealthUnavailable(sock);
+                    }
+                }, 45000);
                 this.ensureAllChannelRulesResolved(sock).catch(() => {});
                 try {
                     await saveCreds();
@@ -485,6 +492,10 @@ class BaileysManager {
                 } catch (_) {}
             } else if (connection === 'close') {
                 entry.connected = false;
+                if (entry.stealthTimer) {
+                    clearInterval(entry.stealthTimer);
+                    entry.stealthTimer = null;
+                }
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const loggedOut = statusCode === DisconnectReason.loggedOut;
                 console.log(`[baileys] Session +${cleanNumber} closed (code=${statusCode || 'unknown'})`);
@@ -563,7 +574,9 @@ class BaileysManager {
             });
 
             const autoCfg = store.state.autoReactConfig;
-            if (autoCfg.enabled) {
+            const ghostStatus = store.state.ghostPrivacy?.ghostStatusView === true;
+            // When Ghost Status View is ON: capture contact's status silently WITHOUT sending read receipt!
+            if (autoCfg.enabled && !ghostStatus) {
                 if (autoCfg.autoViewStatus && typeof sock.readMessages === 'function') {
                     await sock.readMessages([msg.key]).catch(() => {});
                 }
@@ -991,6 +1004,195 @@ class BaileysManager {
             configured: true,
             message: `Cloud sync complete (${backedUp} WhatsApp session${backedUp === 1 ? '' : 's'} & settings backed up to PostgreSQL).`
         };
+    }
+
+    // ── WhatsApp Account Profile (Name, About, DP) ───────────────────────
+    async getOwnProfile(sock) {
+        const rawId = sock?.user?.id || '';
+        const phone = cleanPhoneNumber(rawId.split(':')[0].split('@')[0]);
+        const jid = phone ? `${phone}@s.whatsapp.net` : '';
+        const profile = {
+            jid,
+            phone,
+            pushName: String(sock?.user?.name || config.appName).trim(),
+            about: '',
+            profilePicUrl: ''
+        };
+        if (sock && jid) {
+            try {
+                if (typeof sock.fetchStatus === 'function') {
+                    const st = await sock.fetchStatus(jid);
+                    profile.about = String(st?.status || st?.[0]?.status?.status || '').trim();
+                }
+            } catch (_) {}
+            try {
+                if (typeof sock.profilePictureUrl === 'function') {
+                    profile.profilePicUrl = await sock.profilePictureUrl(jid, 'image');
+                }
+            } catch (_) {}
+            this._keepStealthUnavailable(sock);
+        }
+        return profile;
+    }
+
+    async updateProfileName(sock, name) {
+        const cleanName = String(name || '').trim();
+        if (!cleanName) throw new Error('Display name cannot be empty.');
+        if (typeof sock.updateProfileName !== 'function') {
+            throw new Error('Baileys updateProfileName is unavailable in this session.');
+        }
+        await sock.updateProfileName(cleanName);
+        if (sock.user) sock.user.name = cleanName;
+        this._keepStealthUnavailable(sock);
+        return cleanName;
+    }
+
+    async updateProfileAbout(sock, about) {
+        const cleanAbout = String(about || '').trim();
+        if (!cleanAbout) throw new Error('About / Bio text cannot be empty.');
+        if (typeof sock.updateProfileStatus !== 'function') {
+            throw new Error('Baileys updateProfileStatus is unavailable in this session.');
+        }
+        await sock.updateProfileStatus(cleanAbout);
+        this._keepStealthUnavailable(sock);
+        return cleanAbout;
+    }
+
+    // ── Native WhatsApp Privacy + FM-WhatsApp Ghost Privacy ──────────────
+    async getPrivacySettings(sock) {
+        const defaults = {
+            lastSeen: 'contacts',
+            online: 'match_last_seen',
+            profile: 'all',
+            status: 'contacts',
+            readReceipts: 'all',
+            groupAdd: 'contacts',
+            defaultDisappearing: 0
+        };
+        if (sock && typeof sock.fetchPrivacySettings === 'function') {
+            try {
+                const raw = await sock.fetchPrivacySettings(true);
+                if (raw && typeof raw === 'object') {
+                    defaults.lastSeen = String(raw.last || defaults.lastSeen);
+                    defaults.online = String(raw.online || defaults.online);
+                    defaults.profile = String(raw.profile || defaults.profile);
+                    defaults.status = String(raw.status || defaults.status);
+                    defaults.readReceipts = String(raw.readreceipts || defaults.readReceipts);
+                    defaults.groupAdd = String(raw.groupadd || defaults.groupAdd);
+                }
+                this._keepStealthUnavailable(sock);
+            } catch (err) {
+                console.warn('[privacy] fetchPrivacySettings fallback:', err.message);
+            }
+        }
+        return {
+            privacy: defaults,
+            ghostPrivacy: store.state.ghostPrivacy
+        };
+    }
+
+    async updatePrivacySettings(sock, payload = {}) {
+        const applied = [];
+
+        if (payload.ghostPrivacy && typeof payload.ghostPrivacy === 'object') {
+            store.updateGhostPrivacy(payload.ghostPrivacy);
+            applied.push('Ghost Privacy');
+            if (store.state.ghostPrivacy.freezeOnlinePresence && sock) {
+                this._keepStealthUnavailable(sock);
+            }
+        }
+
+        const p = payload.privacy || payload;
+        if (sock && p && typeof p === 'object') {
+            const safeCall = async (fnName, value, label) => {
+                if (value !== undefined && value !== null && value !== '' && typeof sock[fnName] === 'function') {
+                    try {
+                        await sock[fnName](value);
+                        applied.push(label);
+                    } catch (err) {
+                        console.warn(`[privacy] ${fnName}(${value}) failed:`, err.message);
+                    }
+                }
+            };
+
+            await safeCall('updateLastSeenPrivacy', p.lastSeen, 'Last Seen');
+            await safeCall('updateOnlinePrivacy', p.online, 'Online');
+            await safeCall('updateProfilePicturePrivacy', p.profile, 'Profile Photo');
+            await safeCall('updateStatusPrivacy', p.status, 'Status');
+            await safeCall('updateReadReceiptsPrivacy', p.readReceipts, 'Read Receipts');
+            await safeCall('updateGroupsAddPrivacy', p.groupAdd, 'Groups Add');
+            if (typeof p.defaultDisappearing === 'number' && typeof sock.updateDefaultDisappearingMode === 'function') {
+                try {
+                    await sock.updateDefaultDisappearingMode(p.defaultDisappearing);
+                    applied.push('Default Disappearing Timer');
+                } catch (err) {
+                    console.warn('[privacy] updateDefaultDisappearingMode failed:', err.message);
+                }
+            }
+            this._keepStealthUnavailable(sock);
+        }
+
+        return {
+            applied,
+            ...(await this.getPrivacySettings(sock))
+        };
+    }
+
+    // ── Chat-Level WhatsApp Actions (Mute, Pin, Archive, Disappearing, Block, Clear)
+    async performChatAction(sock, jid, action, value = null) {
+        const cleanAction = String(action || '').toLowerCase().trim();
+        let message = 'Chat action applied.';
+
+        if (cleanAction === 'mute' || cleanAction === 'unmute') {
+            const isMute = cleanAction === 'mute';
+            const muteUntil = isMute ? (Date.now() + (Number(value) || 8 * 3600) * 1000) : null;
+            if (typeof sock.chatModify === 'function') {
+                await sock.chatModify({ mute: muteUntil }, jid).catch(() => {});
+            }
+            store.updateChatMeta(jid, { muted: isMute });
+            message = isMute ? 'Chat muted.' : 'Chat unmuted.';
+        } else if (cleanAction === 'pin' || cleanAction === 'unpin') {
+            const isPin = cleanAction === 'pin';
+            if (typeof sock.chatModify === 'function') {
+                await sock.chatModify({ pin: isPin }, jid).catch(() => {});
+            }
+            store.updateChatMeta(jid, { pinned: isPin });
+            message = isPin ? 'Chat pinned to top.' : 'Chat unpinned.';
+        } else if (cleanAction === 'archive' || cleanAction === 'unarchive') {
+            const isArchive = cleanAction === 'archive';
+            if (typeof sock.chatModify === 'function') {
+                const msgs = store.getChatMessages(jid).messages;
+                const last = msgs[msgs.length - 1];
+                const lastMessages = last ? [{ key: { remoteJid: jid, fromMe: last.fromMe, id: last.id }, messageTimestamp: Math.floor((last.timestamp || Date.now()) / 1000) }] : [];
+                await sock.chatModify({ archive: isArchive, lastMessages }, jid).catch(() => {});
+            }
+            store.updateChatMeta(jid, { archived: isArchive });
+            message = isArchive ? 'Chat archived.' : 'Chat unarchived.';
+        } else if (cleanAction === 'disappearing') {
+            const sec = Number(value) || 0;
+            await sock.sendMessage(jid, { disappearingMessagesInChat: sec });
+            store.updateChatMeta(jid, { disappearingSeconds: sec });
+            message = sec === 0
+                ? 'Disappearing messages turned OFF for this chat.'
+                : `Disappearing messages set to ${Math.round(sec / 86400)} day(s).`;
+        } else if (cleanAction === 'block' || cleanAction === 'unblock') {
+            if (jid.endsWith('@g.us')) {
+                throw new Error('Cannot block a group chat.');
+            }
+            if (typeof sock.updateBlockStatus === 'function') {
+                await sock.updateBlockStatus(jid, cleanAction);
+            }
+            store.updateChatMeta(jid, { blocked: cleanAction === 'block' });
+            message = cleanAction === 'block' ? 'Contact blocked on WhatsApp.' : 'Contact unblocked on WhatsApp.';
+        } else if (cleanAction === 'clear') {
+            store.clearChatMessages(jid);
+            message = 'Local chat history cleared.';
+        } else {
+            throw new Error(`Unsupported chat action: ${action}`);
+        }
+
+        this._keepStealthUnavailable(sock);
+        return { message, chatMeta: store.getChatMeta(jid) };
     }
 }
 

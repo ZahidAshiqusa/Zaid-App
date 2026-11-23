@@ -10,7 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -166,7 +166,10 @@ fun VaultScreen(
                     )
                 }
             } else {
-                items(uiState.vaultItems, key = { it.id }) { item ->
+                itemsIndexed(
+                    items = uiState.vaultItems,
+                    key = { idx, item -> "vault_${idx}_${item.id}" }
+                ) { _, item ->
                     Surface(
                         shape = RoundedCornerShape(18.dp),
                         color = GlassCardSurface,
@@ -550,7 +553,10 @@ fun ChannelReactScreen(
                 }
             }
 
-            items(uiState.channels, key = { it.id.ifBlank { it.jid } }) { rule ->
+            itemsIndexed(
+                items = uiState.channels,
+                key = { idx, rule -> "rule_${idx}_${rule.id.ifBlank { rule.jid }}" }
+            ) { _, rule ->
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = GlassCardSurface,

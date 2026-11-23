@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.zaidashiq.chat.data.local.LocalChatStore
 import com.zaidashiq.chat.data.local.SessionPreferences
 import com.zaidashiq.chat.data.model.*
 import com.zaidashiq.chat.data.network.BackendConfig
@@ -51,9 +52,24 @@ private val SONG_LINK_REGEX = Regex(
     RegexOption.IGNORE_CASE
 )
 
+private val SOCIAL_MEDIA_LINK_REGEX = Regex(
+    "^https?://(?:" +
+        "(?:www\\.|vm\\.|vt\\.|m\\.)?tiktok\\.com/[^\\s]+|" +
+        "(?:www\\.|m\\.)?instagram\\.com/(?:reel|p|tv)/[^\\s]+|" +
+        "(?:www\\.|m\\.)?facebook\\.com/[^\\s]+|" +
+        "fb\\.watch/[^\\s]+" +
+        ")$",
+    RegexOption.IGNORE_CASE
+)
+
 fun isDirectSongLink(input: String): Boolean {
     val clean = input.trim()
     return clean.isNotEmpty() && SONG_LINK_REGEX.matches(clean)
+}
+
+fun isDirectSocialMediaLink(input: String): Boolean {
+    val clean = input.trim()
+    return clean.isNotEmpty() && SOCIAL_MEDIA_LINK_REGEX.matches(clean)
 }
 
 enum class UploadStage {
@@ -131,6 +147,14 @@ data class MainUiState(
     val vaultItems: List<VaultItem> = emptyList(),
     val vaultSettings: VaultSettingsPayload = VaultSettingsPayload(),
     val autoReactConfig: AutoReactConfigPayload = AutoReactConfigPayload(),
+    val accountProfile: AccountProfileResponse = AccountProfileResponse(),
+    val privacySettings: NativePrivacyPayload = NativePrivacyPayload(),
+    val ghostPrivacy: GhostPrivacyPayload = GhostPrivacyPayload(),
+    val activeChatMeta: ChatMetaPayload = ChatMetaPayload(),
+    val botCommands: List<BotCommandItem> = emptyList(),
+    val isUpdatingSettings: Boolean = false,
+    val exportedBackupTitle: String = "",
+    val exportedBackupText: String? = null,
     val bannerNotice: String? = null,
     val snackbarMessage: String? = null
 )
@@ -138,6 +162,7 @@ data class MainUiState(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val sessionPrefs = SessionPreferences(application.applicationContext)
+    private val localChatStore = LocalChatStore(application.applicationContext)
     private val repository = ChatRepository(application.applicationContext, sessionPrefs)
 
     private val _uiState = MutableStateFlow(MainUiState())
@@ -158,7 +183,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        refreshBackendStatus()
+        viewModelScope.launch {
+            if (!localChatStore.hasCompletedInitialOldChatClear()) {
+                localChatStore.clearAllLocalChats(recordCutoffNow = true)
+                _uiState.update {
+                    it.copy(
+                        chats = emptyList(),
+                        activeChatMessages = emptyList(),
+                        capturedStatuses = emptyList(),
+                        calls = emptyList()
+                    )
+                }
+                // Best-effort clear of old chats cached on Railway backend as well
+                repository.clearAllChats()
+            } else {
+                val savedLocalChats = localChatStore.getLocalChats()
+                if (savedLocalChats.isNotEmpty()) {
+                    _uiState.update { it.copy(chats = savedLocalChats) }
+                }
+            }
+            refreshBackendStatus()
+        }
+    }
+
+    fun clearAllOldChats() {
+        viewModelScope.launch {
+            localChatStore.clearAllLocalChats(recordCutoffNow = true)
+            _uiState.update {
+                it.copy(
+                    chats = emptyList(),
+                    activeChatMessages = emptyList(),
+                    capturedStatuses = emptyList(),
+                    calls = emptyList(),
+                    snackbarMessage = "All old chats cleared — new chats save locally on device."
+                )
+            }
+            repository.clearAllChats()
+        }
     }
 
     fun consumeSnackbar() {
@@ -345,14 +406,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadChats() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isRefreshingHome = true) }
+            val localCached = localChatStore.getLocalChats()
+            _uiState.update { state ->
+                state.copy(
+                    chats = if (localCached.isNotEmpty()) localCached else state.chats,
+                    isRefreshingHome = true
+                )
+            }
             repository.getChats().onSuccess { res ->
-                _uiState.update { it.copy(chats = res.chats, isRefreshingHome = false, backendHealthy = true) }
+                val merged = localChatStore.mergeServerChats(res.chats)
+                _uiState.update {
+                    it.copy(
+                        chats = merged.distinctBy { c -> c.resolvedJid.ifBlank { c.resolvedPhone } },
+                        isRefreshingHome = false,
+                        backendHealthy = true
+                    )
+                }
             }.onFailure {
                 _uiState.update { it.copy(isRefreshingHome = false) }
             }
             repository.getContacts().onSuccess { res ->
-                _uiState.update { it.copy(contacts = res.contacts) }
+                _uiState.update {
+                    it.copy(contacts = res.contacts.distinctBy { c -> c.jid.ifBlank { c.number } })
+                }
             }
         }
     }
@@ -360,7 +436,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun loadStatuses() {
         viewModelScope.launch {
             repository.getCapturedStatuses().onSuccess { res ->
-                _uiState.update { it.copy(capturedStatuses = res.statuses) }
+                val cutoff = localChatStore.getClearedCutoffMs()
+                val unique = res.statuses
+                    .filter { st ->
+                        val ts = if (st.timestamp < 1_000_000_000_000L) st.timestamp * 1000L else st.timestamp
+                        cutoff <= 0L || ts <= 0L || ts > cutoff
+                    }
+                    .distinctBy { it.id.ifBlank { "${it.senderNumber}_${it.timestamp}" } }
+                _uiState.update { it.copy(capturedStatuses = unique) }
             }
         }
     }
@@ -368,7 +451,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun loadGroups() {
         viewModelScope.launch {
             repository.getGroups().onSuccess { res ->
-                _uiState.update { it.copy(groups = res.groups) }
+                _uiState.update { it.copy(groups = res.groups.distinctBy { g -> g.jid }) }
             }
         }
     }
@@ -376,7 +459,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun loadChannels() {
         viewModelScope.launch {
             repository.getChannels().onSuccess { res ->
-                _uiState.update { it.copy(channels = res.channels) }
+                _uiState.update {
+                    it.copy(channels = res.channels.distinctBy { ch -> ch.id.ifBlank { ch.jid } })
+                }
             }
         }
     }
@@ -384,7 +469,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun loadCalls() {
         viewModelScope.launch {
             repository.getRecentCalls().onSuccess { res ->
-                _uiState.update { it.copy(calls = res.calls) }
+                val cutoff = localChatStore.getClearedCutoffMs()
+                val unique = res.calls
+                    .filter { c ->
+                        val ts = if (c.timestamp < 1_000_000_000_000L) c.timestamp * 1000L else c.timestamp
+                        cutoff <= 0L || ts <= 0L || ts > cutoff
+                    }
+                    .distinctBy { it.id.ifBlank { "${it.callerNumber}_${it.timestamp}" } }
+                _uiState.update { it.copy(calls = unique) }
             }
         }
     }
@@ -399,6 +491,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 activeChatLastSeen = ""
             )
         }
+        viewModelScope.launch {
+            val localMsgs = localChatStore.getLocalMessages(recipientPhoneOrJid)
+            if (localMsgs.isNotEmpty()) {
+                _uiState.update { state ->
+                    state.copy(
+                        activeChatMessages = localMsgs,
+                        isLoadingChat = false
+                    )
+                }
+            }
+        }
         if (!recipientPhoneOrJid.endsWith("@g.us")) {
             viewModelScope.launch {
                 repository.getChatPresence(recipientPhoneOrJid).onSuccess { pres ->
@@ -411,11 +514,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         activeChatPollJob = viewModelScope.launch {
             while (isActive) {
                 repository.getChatMessages(key).onSuccess { res ->
+                    val savedLocal = localChatStore.mergeServerMessages(
+                        jidOrNumber = recipientPhoneOrJid,
+                        serverMessages = res.messages,
+                        contactName = res.contactName
+                    )
+                    val refreshedChats = localChatStore.getLocalChats()
                     _uiState.update { state ->
                         val pendingLocal = state.activeChatMessages.filter { it.pending }
-                        val serverIds = res.messages.map { it.id }.toSet()
-                        val merged = res.messages + pendingLocal.filterNot { it.id in serverIds }
+                        val savedIds = savedLocal.map { it.id }.toSet()
+                        val merged = (savedLocal + pendingLocal.filterNot { it.id in savedIds })
+                            .distinctBy { it.id.ifBlank { "${it.timestamp}_${it.text.hashCode()}" } }
                         state.copy(
+                            chats = if (refreshedChats.isNotEmpty()) refreshedChats else state.chats,
                             activeChatMessages = merged,
                             activeChatLastSeen = res.lastSeenFormatted.ifBlank { state.activeChatLastSeen },
                             isLoadingChat = false
@@ -440,6 +551,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val oldest = _uiState.value.activeChatMessages.firstOrNull()
         _uiState.update { it.copy(isLoadingOlderChats = true) }
         viewModelScope.launch {
+            localChatStore.resetClearedCutoffForOlderSync()
             repository.loadOlderChats(
                 jid = recipientJid,
                 oldestMsgId = oldest?.id.orEmpty(),
@@ -448,9 +560,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ).onSuccess { res ->
                 val key = recipientJid.substringBefore("@")
                 repository.getChatMessages(key).onSuccess { viewRes ->
+                    val merged = localChatStore.mergeServerMessages(
+                        jidOrNumber = recipientJid,
+                        serverMessages = viewRes.messages,
+                        contactName = viewRes.contactName
+                    )
                     _uiState.update { state ->
                         state.copy(
-                            activeChatMessages = viewRes.messages,
+                            activeChatMessages = merged,
                             activeChatLastSeen = viewRes.lastSeenFormatted.ifBlank { state.activeChatLastSeen },
                             isLoadingOlderChats = false,
                             snackbarMessage = res.message ?: "Checked for older messages"
@@ -479,6 +596,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_uiState.value.isLoadingOlderChats) return
         _uiState.update { it.copy(isLoadingOlderChats = true, isRefreshingHome = true) }
         viewModelScope.launch {
+            localChatStore.resetClearedCutoffForOlderSync()
             repository.loadOlderChats().onSuccess { res ->
                 loadAllHomeData()
                 _uiState.update {
@@ -551,14 +669,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val clean = text.trim()
         if (clean.isBlank()) return
 
-        // Intercept .play / .song / .video commands -> download & send direct media + buttons in chat!
+        // Intercept ALL bot commands (.play, .video, .tiktok, .fb, .ig, .dl, .number) -> live in-chat processing bubble!
         if (clean.equals(".play", ignoreCase = true) || clean.equals(".song", ignoreCase = true)) {
             _uiState.update {
                 it.copy(snackbarMessage = "Usage: .play <song name or link> — or paste a song link directly!")
             }
             return
         }
-        val playRegex = Regex("^\\.(?:play|song)\\s+(.+)$", RegexOption.IGNORE_CASE)
+        val playRegex = Regex("^\\.(?:play|song|music|mp3)\\s+(.+)$", RegexOption.IGNORE_CASE)
         playRegex.matchEntire(clean)?.let { match ->
             val songQuery = match.groupValues[1].trim()
             if (songQuery.isNotBlank()) {
@@ -571,7 +689,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
         }
-        val videoRegex = Regex("^\\.video\\s+(.+)$", RegexOption.IGNORE_CASE)
+        val videoRegex = Regex("^\\.(?:video|ytv|mp4)\\s+(.+)$", RegexOption.IGNORE_CASE)
         videoRegex.matchEntire(clean)?.let { match ->
             val videoQuery = match.groupValues[1].trim()
             if (videoQuery.isNotBlank()) {
@@ -584,12 +702,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
         }
+        val tiktokRegex = Regex("^\\.(?:tiktok|tt)\\s+(.+)$", RegexOption.IGNORE_CASE)
+        tiktokRegex.matchEntire(clean)?.let { match ->
+            val q = match.groupValues[1].trim()
+            if (q.isNotBlank()) {
+                downloadAndSendMedia(recipientJid, ChatToolType.TIKTOK, q, "")
+                return
+            }
+        }
+        val fbRegex = Regex("^\\.(?:fb|facebook)\\s+(.+)$", RegexOption.IGNORE_CASE)
+        fbRegex.matchEntire(clean)?.let { match ->
+            val q = match.groupValues[1].trim()
+            if (q.isNotBlank()) {
+                downloadAndSendMedia(recipientJid, ChatToolType.FACEBOOK, q, "")
+                return
+            }
+        }
+        val igRegex = Regex("^\\.(?:ig|insta|instagram)\\s+(.+)$", RegexOption.IGNORE_CASE)
+        igRegex.matchEntire(clean)?.let { match ->
+            val q = match.groupValues[1].trim()
+            if (q.isNotBlank()) {
+                downloadAndSendMedia(recipientJid, ChatToolType.INSTAGRAM, q, "")
+                return
+            }
+        }
+        val dlRegex = Regex("^\\.(?:dl|download)\\s+(.+)$", RegexOption.IGNORE_CASE)
+        dlRegex.matchEntire(clean)?.let { match ->
+            val q = match.groupValues[1].trim()
+            if (q.isNotBlank()) {
+                downloadAndSendMedia(recipientJid, ChatToolType.DOWNLOADER, q, "")
+                return
+            }
+        }
 
-        // Auto-detect pasted Song Link directly in chat (YouTube, YT Music, Spotify, SoundCloud, direct MP3/M4A/OGG)
+        val numRegex = Regex("^\\.(?:number|sim|tc|truecaller)\\s+(.+)$", RegexOption.IGNORE_CASE)
+        numRegex.matchEntire(clean)?.let { match ->
+            val q = match.groupValues[1].trim()
+            if (q.isNotBlank()) {
+                fetchAndSendNumberDetailsInChat(recipientJid, q)
+                return
+            }
+        }
+
+        // Auto-detect pasted Song or Social Media links directly in chat
         if (isDirectSongLink(clean)) {
             downloadAndSendMedia(
                 recipientJid = recipientJid,
                 tool = ChatToolType.SONG,
+                queryOrUrl = clean,
+                caption = ""
+            )
+            return
+        }
+        if (isDirectSocialMediaLink(clean)) {
+            val detectedTool = when {
+                clean.contains("tiktok", ignoreCase = true) -> ChatToolType.TIKTOK
+                clean.contains("instagram", ignoreCase = true) -> ChatToolType.INSTAGRAM
+                clean.contains("facebook", ignoreCase = true) || clean.contains("fb.watch", ignoreCase = true) -> ChatToolType.FACEBOOK
+                else -> ChatToolType.DOWNLOADER
+            }
+            downloadAndSendMedia(
+                recipientJid = recipientJid,
+                tool = detectedTool,
                 queryOrUrl = clean,
                 caption = ""
             )
@@ -609,25 +783,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         _uiState.update {
             it.copy(
-                activeChatMessages = it.activeChatMessages + optimistic,
+                activeChatMessages = (it.activeChatMessages + optimistic).distinctBy { m -> m.id },
                 isSendingMessage = true
             )
         }
 
         viewModelScope.launch {
             repository.sendText(recipientJid, clean).onSuccess { res ->
+                val delivered = optimistic.copy(
+                    id = res.id ?: tempId,
+                    text = res.text?.ifBlank { clean } ?: clean,
+                    status = res.status.coerceAtLeast(2),
+                    timestamp = res.timestamp ?: optimistic.timestamp,
+                    pending = false
+                )
+                val (updatedChats, updatedLocalMsgs) = localChatStore.saveDeliveredMessage(
+                    jidOrNumber = recipientJid,
+                    message = delivered
+                )
                 _uiState.update { state ->
+                    val pendingOthers = state.activeChatMessages.filter { it.pending && it.id != tempId }
+                    val merged = (updatedLocalMsgs + pendingOthers)
+                        .distinctBy { it.id.ifBlank { "${it.timestamp}_${it.text.hashCode()}" } }
                     state.copy(
+                        chats = updatedChats,
                         isSendingMessage = false,
-                        activeChatMessages = state.activeChatMessages.map { msg ->
-                            if (msg.id == tempId) {
-                                msg.copy(
-                                    id = res.id ?: tempId,
-                                    status = res.status.coerceAtLeast(2),
-                                    pending = false
-                                )
-                            } else msg
-                        }
+                        activeChatMessages = merged
                     )
                 }
             }.onFailure { err ->
@@ -636,6 +817,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         isSendingMessage = false,
                         activeChatMessages = state.activeChatMessages.filterNot { it.id == tempId },
                         snackbarMessage = err.message ?: "Failed to send message"
+                    )
+                }
+            }
+        }
+    }
+
+    fun fetchAndSendNumberDetailsInChat(recipientJid: String, rawQuery: String) {
+        val clean = rawQuery.trim()
+        val tempId = "pending_number_${System.currentTimeMillis()}"
+        val pendingBubble = ChatMessageItem(
+            id = tempId,
+            fromMe = true,
+            text = "Fetching Truecaller & SIM DB details for $clean…",
+            mediaType = "number",
+            timestamp = System.currentTimeMillis(),
+            status = 1,
+            pending = true
+        )
+        _uiState.update {
+            it.copy(
+                isProcessingTool = true,
+                toolStatusText = "Fetching Number Details…",
+                activeChatMessages = (it.activeChatMessages + pendingBubble).distinctBy { m -> m.id }
+            )
+        }
+        viewModelScope.launch {
+            repository.lookupNumber(clean).onSuccess { details ->
+                val reportText = formatNumberDetailsSummary(details)
+                repository.sendText(recipientJid, reportText).onSuccess { sentRes ->
+                    val delivered = ChatMessageItem(
+                        id = sentRes.id ?: "num_${System.currentTimeMillis()}",
+                        fromMe = true,
+                        text = sentRes.text?.ifBlank { reportText } ?: reportText,
+                        mediaType = "number",
+                        status = sentRes.status.coerceAtLeast(2),
+                        timestamp = sentRes.timestamp ?: System.currentTimeMillis(),
+                        pending = false
+                    )
+                    val (updatedChats, updatedLocalMsgs) = localChatStore.saveDeliveredMessage(
+                        jidOrNumber = recipientJid,
+                        message = delivered
+                    )
+                    _uiState.update { state ->
+                        val pendingOthers = state.activeChatMessages.filter { it.pending && it.id != tempId }
+                        val merged = (updatedLocalMsgs + pendingOthers)
+                            .distinctBy { it.id.ifBlank { "${it.timestamp}_${it.text.hashCode()}" } }
+                        state.copy(
+                            chats = updatedChats,
+                            isProcessingTool = false,
+                            toolStatusText = null,
+                            activeChatMessages = merged,
+                            snackbarMessage = "Number details fetched & sent to chat!"
+                        )
+                    }
+                }.onFailure { err ->
+                    _uiState.update { state ->
+                        state.copy(
+                            isProcessingTool = false,
+                            toolStatusText = null,
+                            activeChatMessages = state.activeChatMessages.filterNot { it.id == tempId },
+                            snackbarMessage = err.message ?: "Failed to send number details to chat"
+                        )
+                    }
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        isProcessingTool = false,
+                        toolStatusText = null,
+                        activeChatMessages = state.activeChatMessages.filterNot { it.id == tempId },
+                        snackbarMessage = err.message ?: "Number lookup failed"
                     )
                 }
             }
@@ -657,12 +909,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val tempId = "pending_media_${System.currentTimeMillis()}"
         val processingLabel = when (tool) {
-            ChatToolType.SONG -> "Processing Song: $clean"
-            ChatToolType.VIDEO -> "Processing Video: $clean"
-            ChatToolType.TIKTOK -> "Processing TikTok Video…"
-            ChatToolType.FACEBOOK -> "Processing Facebook Video…"
-            ChatToolType.INSTAGRAM -> "Processing Instagram Media…"
-            else -> "Processing ${tool.title}…"
+            ChatToolType.SONG -> "Downloading Song on backend: $clean…"
+            ChatToolType.VIDEO -> "Downloading Video on backend: $clean…"
+            ChatToolType.TIKTOK -> "Downloading TikTok Video on backend…"
+            ChatToolType.FACEBOOK -> "Downloading Facebook Video on backend…"
+            ChatToolType.INSTAGRAM -> "Downloading Instagram Media on backend…"
+            else -> "Downloading ${tool.title} on backend…"
         }
 
         val pendingBubble = ChatMessageItem(
@@ -681,7 +933,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 activeMediaTool = tool,
                 activeMediaQuery = clean,
                 toolStatusText = processingLabel,
-                activeChatMessages = it.activeChatMessages + pendingBubble
+                activeChatMessages = (it.activeChatMessages + pendingBubble).distinctBy { m -> m.id }
             )
         }
         onDone()
@@ -704,17 +956,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     timestamp = System.currentTimeMillis(),
                     pending = false
                 )
+                val (updatedChats, updatedLocalMsgs) = localChatStore.saveDeliveredMessage(
+                    jidOrNumber = recipientJid,
+                    message = deliveredBubble
+                )
                 _uiState.update { state ->
-                    val replaced = state.activeChatMessages.map { msg ->
-                        if (msg.id == tempId) deliveredBubble else msg
-                    }
+                    val pendingOthers = state.activeChatMessages.filter { it.pending && it.id != tempId }
+                    val merged = (updatedLocalMsgs + pendingOthers)
+                        .distinctBy { it.id.ifBlank { "${it.timestamp}_${it.text.hashCode()}" } }
                     state.copy(
+                        chats = updatedChats,
                         isProcessingTool = false,
                         activeMediaTool = null,
                         activeMediaQuery = "",
                         toolStatusText = null,
-                        activeChatMessages = if (replaced.any { it.id == deliveredBubble.id }) replaced else replaced + deliveredBubble,
-                        snackbarMessage = res.message ?: "${tool.title} sent directly!"
+                        activeChatMessages = merged,
+                        snackbarMessage = res.message ?: "${tool.title} downloaded & transferred to chat!"
                     )
                 }
             }.onFailure { err ->
@@ -749,7 +1006,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 activeMediaTool = ChatToolType.DOWNLOADER,
                 activeMediaQuery = gif.title.ifBlank { "GIF" },
                 toolStatusText = "Processing GIF…",
-                activeChatMessages = it.activeChatMessages + pendingBubble
+                activeChatMessages = (it.activeChatMessages + pendingBubble).distinctBy { m -> m.id }
             )
         }
         onDone()
@@ -769,13 +1026,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     timestamp = System.currentTimeMillis(),
                     pending = false
                 )
+                val (updatedChats, updatedLocalMsgs) = localChatStore.saveDeliveredMessage(
+                    jidOrNumber = recipientJid,
+                    message = bubble
+                )
                 _uiState.update { state ->
+                    val pendingOthers = state.activeChatMessages.filter { it.pending && it.id != tempId }
                     state.copy(
+                        chats = updatedChats,
                         isProcessingTool = false,
                         activeMediaTool = null,
                         activeMediaQuery = "",
                         toolStatusText = null,
-                        activeChatMessages = state.activeChatMessages.map { if (it.id == tempId) bubble else it },
+                        activeChatMessages = (updatedLocalMsgs + pendingOthers).distinctBy { it.id },
                         snackbarMessage = "GIF sent!"
                     )
                 }
@@ -801,7 +1064,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isSearchingGiphy = false,
-                        giphyResults = res.results,
+                        giphyResults = res.results.distinctBy { g -> g.id.ifBlank { g.mp4Url } },
                         snackbarMessage = if (res.results.isEmpty() && !res.error.isNullOrBlank()) res.error else it.snackbarMessage
                     )
                 }
@@ -833,7 +1096,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 activeMediaTool = ChatToolType.VIDEO_NOTE,
                 activeMediaQuery = "Circular Video Note",
                 toolStatusText = "Processing Video Note…",
-                activeChatMessages = it.activeChatMessages + pendingBubble
+                activeChatMessages = (it.activeChatMessages + pendingBubble).distinctBy { m -> m.id }
             )
         }
         onDone()
@@ -849,13 +1112,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     timestamp = System.currentTimeMillis(),
                     pending = false
                 )
+                val (updatedChats, updatedLocalMsgs) = localChatStore.saveDeliveredMessage(
+                    jidOrNumber = recipientJid,
+                    message = bubble
+                )
                 _uiState.update { state ->
+                    val pendingOthers = state.activeChatMessages.filter { it.pending && it.id != tempId }
                     state.copy(
+                        chats = updatedChats,
                         isProcessingTool = false,
                         activeMediaTool = null,
                         activeMediaQuery = "",
                         toolStatusText = null,
-                        activeChatMessages = state.activeChatMessages.map { if (it.id == tempId) bubble else it },
+                        activeChatMessages = (updatedLocalMsgs + pendingOthers).distinctBy { it.id },
                         snackbarMessage = res.message ?: "Video Note sent!"
                     )
                 }
@@ -890,7 +1159,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isProcessingTool = true,
                 activeMediaTool = ChatToolType.VOICE_NOTE,
                 toolStatusText = "Processing Voice Note…",
-                activeChatMessages = it.activeChatMessages + pendingBubble
+                activeChatMessages = (it.activeChatMessages + pendingBubble).distinctBy { m -> m.id }
             )
         }
         onDone()
@@ -906,12 +1175,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     timestamp = System.currentTimeMillis(),
                     pending = false
                 )
+                val (updatedChats, updatedLocalMsgs) = localChatStore.saveDeliveredMessage(
+                    jidOrNumber = recipientJid,
+                    message = bubble
+                )
                 _uiState.update { state ->
+                    val pendingOthers = state.activeChatMessages.filter { it.pending && it.id != tempId }
                     state.copy(
+                        chats = updatedChats,
                         isProcessingTool = false,
                         activeMediaTool = null,
                         toolStatusText = null,
-                        activeChatMessages = state.activeChatMessages.map { if (it.id == tempId) bubble else it },
+                        activeChatMessages = (updatedLocalMsgs + pendingOthers).distinctBy { it.id },
                         snackbarMessage = res.message ?: "Voice Note sent!"
                     )
                 }
@@ -945,7 +1220,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isProcessingTool = true,
                 activeMediaTool = ChatToolType.VOICE_NOTE,
                 toolStatusText = "Processing Voice Note…",
-                activeChatMessages = it.activeChatMessages + pendingBubble
+                activeChatMessages = (it.activeChatMessages + pendingBubble).distinctBy { m -> m.id }
             )
         }
         onDone()
@@ -961,12 +1236,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     timestamp = System.currentTimeMillis(),
                     pending = false
                 )
+                val (updatedChats, updatedLocalMsgs) = localChatStore.saveDeliveredMessage(
+                    jidOrNumber = recipientJid,
+                    message = bubble
+                )
                 _uiState.update { state ->
+                    val pendingOthers = state.activeChatMessages.filter { it.pending && it.id != tempId }
                     state.copy(
+                        chats = updatedChats,
                         isProcessingTool = false,
                         activeMediaTool = null,
                         toolStatusText = null,
-                        activeChatMessages = state.activeChatMessages.map { if (it.id == tempId) bubble else it },
+                        activeChatMessages = (updatedLocalMsgs + pendingOthers).distinctBy { it.id },
                         snackbarMessage = res.message ?: "Voice Note sent!"
                     )
                 }
@@ -1009,7 +1290,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isProcessingTool = true,
                 activeMediaTool = ChatToolType.FAKE_LOCATION,
                 toolStatusText = "Processing Fake Location…",
-                activeChatMessages = it.activeChatMessages + pendingBubble
+                activeChatMessages = (it.activeChatMessages + pendingBubble).distinctBy { m -> m.id }
             )
         }
         onDone()
@@ -1025,12 +1306,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     timestamp = System.currentTimeMillis(),
                     pending = false
                 )
+                val (updatedChats, updatedLocalMsgs) = localChatStore.saveDeliveredMessage(
+                    jidOrNumber = recipientJid,
+                    message = bubble
+                )
                 _uiState.update { state ->
+                    val pendingOthers = state.activeChatMessages.filter { it.pending && it.id != tempId }
                     state.copy(
+                        chats = updatedChats,
                         isProcessingTool = false,
                         activeMediaTool = null,
                         toolStatusText = null,
-                        activeChatMessages = state.activeChatMessages.map { if (it.id == tempId) bubble else it },
+                        activeChatMessages = (updatedLocalMsgs + pendingOthers).distinctBy { it.id },
                         snackbarMessage = res.message ?: "Fake Location sent!"
                     )
                 }
@@ -1070,10 +1357,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     buttons = cleanedButtons,
                     timestamp = System.currentTimeMillis()
                 )
+                val (updatedChats, updatedLocalMsgs) = localChatStore.saveDeliveredMessage(
+                    jidOrNumber = recipientJid,
+                    message = bubble
+                )
                 _uiState.update {
                     it.copy(
+                        chats = updatedChats,
                         isProcessingTool = false,
-                        activeChatMessages = it.activeChatMessages + bubble,
+                        activeChatMessages = updatedLocalMsgs,
                         snackbarMessage = res.message ?: "Interactive button message sent!"
                     )
                 }
@@ -1242,7 +1534,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun loadVault() {
         viewModelScope.launch {
             repository.getVaultItems().onSuccess { res ->
-                _uiState.update { it.copy(vaultItems = res.items) }
+                _uiState.update {
+                    it.copy(vaultItems = res.items.distinctBy { v -> v.id.ifBlank { "${v.senderNumber}_${v.timestamp}" } })
+                }
             }
             repository.getVaultSettings().onSuccess { cfg ->
                 _uiState.update { it.copy(vaultSettings = cfg) }
@@ -1348,9 +1642,281 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun triggerCloudSync() {
         viewModelScope.launch {
             repository.triggerCloudSync().onSuccess { res ->
-                _uiState.update { it.copy(snackbarMessage = res.message ?: "Cloud session synced to Supabase") }
+                _uiState.update { it.copy(snackbarMessage = res.message ?: "Cloud session synced to PostgreSQL") }
             }.onFailure { err ->
                 _uiState.update { it.copy(snackbarMessage = err.message ?: "Cloud sync failed") }
+            }
+        }
+    }
+
+    // ── Account, Ghost Privacy, Native WhatsApp Privacy & Backups ────────
+    fun loadAccountAndPrivacy() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isUpdatingSettings = true) }
+            repository.getAccountProfile().onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        isUpdatingSettings = false,
+                        accountProfile = res,
+                        privacySettings = res.privacy,
+                        ghostPrivacy = res.ghostPrivacy
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        isUpdatingSettings = false,
+                        snackbarMessage = err.message ?: "Could not load account & privacy settings"
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateProfileName(newName: String) {
+        val clean = newName.trim()
+        if (clean.isBlank()) {
+            _uiState.update { it.copy(snackbarMessage = "Enter a display name first.") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isUpdatingSettings = true) }
+            repository.updateAccountProfile(name = clean).onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        isUpdatingSettings = false,
+                        accountProfile = res,
+                        snackbarMessage = res.message ?: "WhatsApp Display Name updated!"
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        isUpdatingSettings = false,
+                        snackbarMessage = err.message ?: "Failed to update display name"
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateProfileAbout(newAbout: String) {
+        val clean = newAbout.trim()
+        if (clean.isBlank()) {
+            _uiState.update { it.copy(snackbarMessage = "Enter About / Bio text first.") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isUpdatingSettings = true) }
+            repository.updateAccountProfile(about = clean).onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        isUpdatingSettings = false,
+                        accountProfile = res,
+                        snackbarMessage = res.message ?: "WhatsApp Bio / About updated!"
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        isUpdatingSettings = false,
+                        snackbarMessage = err.message ?: "Failed to update Bio / About"
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateGhostPrivacy(updated: GhostPrivacyPayload) {
+        _uiState.update { it.copy(ghostPrivacy = updated) }
+        viewModelScope.launch {
+            repository.updatePrivacySettings(ghostPrivacy = updated).onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        ghostPrivacy = res.ghostPrivacy,
+                        privacySettings = res.privacy,
+                        snackbarMessage = res.message ?: "Ghost Privacy saved!"
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { it.copy(snackbarMessage = err.message ?: "Failed to save Ghost Privacy") }
+            }
+        }
+    }
+
+    fun updateNativePrivacy(updated: NativePrivacyPayload) {
+        _uiState.update { it.copy(privacySettings = updated, isUpdatingSettings = true) }
+        viewModelScope.launch {
+            repository.updatePrivacySettings(privacy = updated).onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        isUpdatingSettings = false,
+                        privacySettings = res.privacy,
+                        ghostPrivacy = res.ghostPrivacy,
+                        snackbarMessage = res.message ?: "WhatsApp Privacy updated!"
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        isUpdatingSettings = false,
+                        snackbarMessage = err.message ?: "Failed to update WhatsApp Privacy"
+                    )
+                }
+            }
+        }
+    }
+
+    fun performChatAction(recipientJid: String, action: String, value: Int? = null) {
+        viewModelScope.launch {
+            if (action == "clear") {
+                localChatStore.clearSingleChatLocally(recipientJid)
+                val updatedChats = localChatStore.getLocalChats()
+                _uiState.update {
+                    it.copy(
+                        chats = updatedChats,
+                        activeChatMessages = emptyList()
+                    )
+                }
+            }
+            repository.performChatAction(recipientJid, action, value).onSuccess { res ->
+                _uiState.update { state ->
+                    state.copy(
+                        activeChatMeta = res.chatMeta,
+                        activeChatMessages = if (action == "clear") emptyList() else state.activeChatMessages,
+                        snackbarMessage = res.message ?: "Chat updated!"
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        snackbarMessage = if (action == "clear") "Chat cleared locally!" else (err.message ?: "Chat action failed")
+                    )
+                }
+            }
+        }
+    }
+
+    fun exportChatTranscript(recipientJid: String, recipientName: String) {
+        viewModelScope.launch {
+            val (msgCount, transcript) = localChatStore.exportLocalChatTranscript(recipientJid, recipientName)
+            _uiState.update {
+                it.copy(
+                    exportedBackupTitle = "Local Chat Backup: $recipientName ($msgCount msgs)",
+                    exportedBackupText = transcript,
+                    snackbarMessage = "Local chat backup ready ($msgCount messages)"
+                )
+            }
+        }
+    }
+
+    fun exportFullBackup() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isUpdatingSettings = true) }
+            val (chatCount, msgCount, summaryText) = localChatStore.exportLocalFullBackup()
+            _uiState.update {
+                it.copy(
+                    isUpdatingSettings = false,
+                    exportedBackupTitle = "Local Device Backup ($chatCount chats, $msgCount msgs)",
+                    exportedBackupText = summaryText,
+                    snackbarMessage = "Local device backup exported!"
+                )
+            }
+        }
+    }
+
+    fun clearExportedBackup() {
+        _uiState.update { it.copy(exportedBackupText = null, exportedBackupTitle = "") }
+    }
+
+    private fun formatNumberDetailsSummary(details: NumberLookupResponse): String = buildString {
+        appendLine("*Number Details Report*")
+        appendLine("Phone: ${details.formattedNumber.ifBlank { details.query }}")
+        if (details.localNumber.isNotBlank() && details.localNumber != details.query) {
+            appendLine("Local: ${details.localNumber}")
+        }
+        if (details.operator.isNotBlank()) appendLine("Operator: ${details.operator}")
+        if (details.truecaller.name.isNotBlank()) appendLine("Truecaller Name: ${details.truecaller.name}")
+        if (details.truecaller.country.isNotBlank()) appendLine("Country: ${details.truecaller.country}")
+        if (details.truecaller.address.isNotBlank()) appendLine("Location: ${details.truecaller.address}")
+        if (details.truecaller.email.isNotBlank()) appendLine("Email: ${details.truecaller.email}")
+        appendLine("WhatsApp: ${if (details.whatsapp.registered) "Registered" else "Not verified / Private"}")
+        if (details.whatsapp.about.isNotBlank()) appendLine("About: ${details.whatsapp.about}")
+        if (details.simRecords.isNotEmpty()) {
+            appendLine()
+            appendLine("*SIM Records (${details.simRecords.size})*")
+            details.simRecords.take(5).forEachIndexed { idx, rec ->
+                val parts = listOfNotNull(
+                    rec.name.takeIf { it.isNotBlank() }?.let { "Name: $it" },
+                    rec.cnic.takeIf { it.isNotBlank() }?.let { "CNIC: $it" },
+                    rec.network.takeIf { it.isNotBlank() }?.let { "Network: $it" },
+                    rec.address.takeIf { it.isNotBlank() }?.let { "Address: $it" }
+                ).joinToString(" | ")
+                if (parts.isNotBlank()) appendLine("${idx + 1}. $parts")
+            }
+        }
+    }.trim()
+
+    fun shareNumberDetailsToChat(recipientJid: String, details: NumberLookupResponse) {
+        val summary = formatNumberDetailsSummary(details)
+        val tempId = "pending_share_num_${System.currentTimeMillis()}"
+        val pendingBubble = ChatMessageItem(
+            id = tempId,
+            fromMe = true,
+            text = "Sending Number Details to chat…",
+            mediaType = "number",
+            timestamp = System.currentTimeMillis(),
+            status = 1,
+            pending = true
+        )
+        _uiState.update {
+            it.copy(
+                activeChatMessages = (it.activeChatMessages + pendingBubble).distinctBy { m -> m.id },
+                isSendingMessage = true
+            )
+        }
+        viewModelScope.launch {
+            repository.sendText(recipientJid, summary).onSuccess { res ->
+                val delivered = ChatMessageItem(
+                    id = res.id ?: "num_${System.currentTimeMillis()}",
+                    fromMe = true,
+                    text = res.text?.ifBlank { summary } ?: summary,
+                    mediaType = "number",
+                    status = res.status.coerceAtLeast(2),
+                    timestamp = res.timestamp ?: System.currentTimeMillis(),
+                    pending = false
+                )
+                val (updatedChats, updatedLocalMsgs) = localChatStore.saveDeliveredMessage(
+                    jidOrNumber = recipientJid,
+                    message = delivered
+                )
+                _uiState.update { state ->
+                    val pendingOthers = state.activeChatMessages.filter { it.pending && it.id != tempId }
+                    state.copy(
+                        chats = updatedChats,
+                        isSendingMessage = false,
+                        activeChatMessages = (updatedLocalMsgs + pendingOthers).distinctBy { it.id },
+                        snackbarMessage = "Number details sent to chat!"
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        isSendingMessage = false,
+                        activeChatMessages = state.activeChatMessages.filterNot { it.id == tempId },
+                        snackbarMessage = err.message ?: "Failed to send number details"
+                    )
+                }
+            }
+        }
+    }
+
+    fun loadBotCommands() {
+        viewModelScope.launch {
+            repository.getBotCommands().onSuccess { res ->
+                if (res.commands.isNotEmpty()) {
+                    _uiState.update { it.copy(botCommands = res.commands) }
+                }
             }
         }
     }

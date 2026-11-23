@@ -6,7 +6,7 @@ const config = require('./config');
 const store = require('./store');
 const { baileysManager, toWhatsAppJid } = require('./baileysManager');
 const { searchGiphy, resolveMediaPayload } = require('./mediaDownloader');
-const { lookupNumberDetails } = require('./numberLookup');
+const { lookupNumberDetails, formatNumberDetailsForChat } = require('./numberLookup');
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -156,6 +156,18 @@ function createApiRouter() {
         }
     });
 
+    router.post('/chats/clear-all', (req, res) => {
+        try {
+            store.clearAllChats();
+            res.json({
+                success: true,
+                message: 'All old chats cleared.'
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: err.message || 'Failed clearing chats.' });
+        }
+    });
+
     router.get('/chats/groups', async (req, res) => {
         try {
             const sock = baileysManager.getActiveSocket();
@@ -209,16 +221,81 @@ function createApiRouter() {
             const sock = requireActiveSocket(res);
             if (!sock) return;
 
-            // Intercept .play / .song / .video OR pasted song link -> direct MP3/MP4 + buttons (NO text chat!)
-            const playMatch = cleanText.match(/^\.(?:play|song)\s+(.+)$/i);
-            const videoMatch = cleanText.match(/^\.video\s+(.+)$/i);
-            const isPastedSongLink = /^https?:\/\/(?:(?:www\.|m\.|music\.)?youtube\.com\/(?:watch\?[^\s]*v=[\w-]+|shorts\/[\w-]+|live\/[\w-]+)[^\s]*|youtu\.be\/[\w-]+[^\s]*|open\.spotify\.com\/track\/[\w-]+[^\s]*|spotify\.link\/[\w-]+[^\s]*|(?:www\.|m\.|on\.)?soundcloud\.com\/[^\s]+|[^\s]+\.(?:mp3|m4a|aac|ogg|opus|wav)(?:\?[^\s]*)?)$/i.test(cleanText);
+            // Intercept ALL integrated bot commands OR pasted song/social links right in chat!
+            const playMatch = cleanText.match(/^\.(?:play|song|music|mp3)\s+(.+)$/i);
+            const videoMatch = cleanText.match(/^\.(?:video|ytv|mp4)\s+(.+)$/i);
+            const tiktokMatch = cleanText.match(/^\.(?:tiktok|tt)\s+(.+)$/i);
+            const fbMatch = cleanText.match(/^\.(?:fb|facebook)\s+(.+)$/i);
+            const igMatch = cleanText.match(/^\.(?:ig|insta|instagram)\s+(.+)$/i);
+            const dlMatch = cleanText.match(/^\.(?:dl|download)\s+(.+)$/i);
+            const numMatch = cleanText.match(/^\.(?:number|sim|tc|truecaller)\s+(.+)$/i);
+            const menuMatch = cleanText.match(/^\.(?:menu|help|commands|cmds)$/i);
 
-            if (playMatch || videoMatch || isPastedSongLink) {
-                const targetPlatform = videoMatch ? 'video' : 'song';
-                const targetQuery = videoMatch
-                    ? videoMatch[1].trim()
-                    : (playMatch ? playMatch[1].trim() : cleanText);
+            const isPastedSongLink = /^https?:\/\/(?:(?:www\.|m\.|music\.)?youtube\.com\/(?:watch\?[^\s]*v=[\w-]+|shorts\/[\w-]+|live\/[\w-]+)[^\s]*|youtu\.be\/[\w-]+[^\s]*|open\.spotify\.com\/track\/[\w-]+[^\s]*|spotify\.link\/[\w-]+[^\s]*|(?:www\.|m\.|on\.)?soundcloud\.com\/[^\s]+|[^\s]+\.(?:mp3|m4a|aac|ogg|opus|wav)(?:\?[^\s]*)?)$/i.test(cleanText);
+            const isPastedSocialLink = /^https?:\/\/(?:(?:www\.|vm\.|vt\.|m\.)?tiktok\.com\/[^\s]+|(?:www\.|m\.)?instagram\.com\/(?:reel|p|tv)\/[^\s]+|(?:www\.|m\.|fb\.watch)[^\s]*facebook\.com\/[^\s]+|fb\.watch\/[^\s]+)$/i.test(cleanText);
+
+            if (menuMatch) {
+                const menuText = [
+                    `✨ *${config.appName} — Integrated Bot Commands*`,
+                    '',
+                    '🎵 *.play <song name/link>* — Direct YouTube MP3 + buttons',
+                    '🎬 *.video <name/link>* — Direct YouTube MP4 + buttons',
+                    '📱 *.tiktok <url>* — HD TikTok Video (no watermark)',
+                    '📘 *.fb <url>* — Facebook Reel / Video',
+                    '📸 *.ig <url>* — Instagram Reel / Post',
+                    '⬇️ *.dl <url>* — Universal Media Downloader',
+                    '🔎 *.number <phone>* — Truecaller + SIM DB + WhatsApp Profile',
+                    '🖼️ *Full .fdp DP* — Available in + menu & 3-dot menu',
+                    '👻 *Ghost Privacy & Account* — Available in 3-dot menu',
+                    '',
+                    '_Tip: Paste any YouTube, Spotify, SoundCloud, TikTok, IG, or FB link directly in chat!_'
+                ].join('\n');
+                const sentMenu = await sock.sendMessage(jid, { text: menuText });
+                baileysManager._keepStealthUnavailable(sock);
+                const now = Date.now();
+                const id = sentMenu?.key?.id || `menu_${now}`;
+                store.recordMessage(jid, { id, fromMe: true, senderJid: jid, senderName: 'You', text: menuText, mediaType: 'text', status: 2, timestamp: now });
+                return res.json({ success: true, id, recipient: jid, text: menuText, status: 2, timestamp: now });
+            }
+
+            if (numMatch) {
+                const queryNum = numMatch[1].trim();
+                const details = await lookupNumberDetails(queryNum, sock, store);
+                const reportText = formatNumberDetailsForChat(details);
+                const sentReport = await sock.sendMessage(jid, { text: reportText });
+                baileysManager._keepStealthUnavailable(sock);
+                const now = Date.now();
+                const id = sentReport?.key?.id || `num_${now}`;
+                store.recordMessage(jid, { id, fromMe: true, senderJid: jid, senderName: 'You', text: reportText, mediaType: 'text', status: 2, timestamp: now });
+                return res.json({ success: true, id, recipient: jid, text: reportText, status: 2, timestamp: now });
+            }
+
+            if (playMatch || videoMatch || tiktokMatch || fbMatch || igMatch || dlMatch || isPastedSongLink || isPastedSocialLink) {
+                let targetPlatform = 'song';
+                let targetQuery = cleanText;
+                if (videoMatch) {
+                    targetPlatform = 'video';
+                    targetQuery = videoMatch[1].trim();
+                } else if (playMatch) {
+                    targetPlatform = 'song';
+                    targetQuery = playMatch[1].trim();
+                } else if (tiktokMatch) {
+                    targetPlatform = 'tiktok';
+                    targetQuery = tiktokMatch[1].trim();
+                } else if (fbMatch) {
+                    targetPlatform = 'facebook';
+                    targetQuery = fbMatch[1].trim();
+                } else if (igMatch) {
+                    targetPlatform = 'instagram';
+                    targetQuery = igMatch[1].trim();
+                } else if (dlMatch) {
+                    targetPlatform = 'downloader';
+                    targetQuery = dlMatch[1].trim();
+                } else if (isPastedSocialLink) {
+                    targetPlatform = 'downloader';
+                    targetQuery = cleanText;
+                }
+
                 const resolved = await resolveMediaPayload({
                     platform: targetPlatform,
                     query: targetQuery,
@@ -235,7 +312,7 @@ function createApiRouter() {
                     text: resolved.title,
                     mediaType: resolved.mediaType || (videoMatch ? 'video' : 'audio'),
                     buttons: delivered.buttons,
-                    status: 2, // Single tick until receiver device ACKs delivery
+                    status: 2,
                     timestamp: now
                 });
                 return res.json({
@@ -249,9 +326,7 @@ function createApiRouter() {
             }
 
             const sent = await sock.sendMessage(jid, { text: cleanText });
-            if (typeof sock.sendPresenceUpdate === 'function') {
-                sock.sendPresenceUpdate('unavailable').catch(() => {});
-            }
+            baileysManager._keepStealthUnavailable(sock);
             const msgId = sent?.key?.id || `out_${Date.now()}`;
             const now = Date.now();
             store.recordMessage(jid, {
@@ -274,7 +349,8 @@ function createApiRouter() {
                 timestamp: now
             });
         } catch (err) {
-            res.status(500).json({ success: false, error: err.message || 'Failed to send text.' });
+            console.error('[api/chat/send-text] Error:', err.message);
+            res.status(422).json({ success: false, error: err.message || 'Failed to send message.' });
         }
     });
 
@@ -326,7 +402,7 @@ function createApiRouter() {
             });
         } catch (err) {
             console.error('[api/download-and-send] Error:', err.message);
-            res.status(500).json({
+            res.status(422).json({
                 success: false,
                 error: err.message || 'Failed to download and send media.'
             });
@@ -691,6 +767,143 @@ function createApiRouter() {
         } catch (err) {
             res.status(500).json({ success: false, configured: store.dbReady, error: err.message });
         }
+    });
+
+    // ── WhatsApp Account Profile (Name, Bio/About, DP) ───────────────────
+    router.get('/account/profile', async (req, res) => {
+        try {
+            const sock = baileysManager.getActiveSocket();
+            const profile = await baileysManager.getOwnProfile(sock);
+            const priv = await baileysManager.getPrivacySettings(sock);
+            res.json({
+                success: true,
+                connected: Boolean(sock),
+                ...profile,
+                privacy: priv.privacy,
+                ghostPrivacy: priv.ghostPrivacy
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: err.message || 'Failed loading account profile.' });
+        }
+    });
+
+    router.post('/account/profile', async (req, res) => {
+        try {
+            const sock = requireActiveSocket(res);
+            if (!sock) return;
+            const { name, about } = req.body || {};
+            const updated = [];
+            if (typeof name === 'string' && name.trim().length > 0) {
+                await baileysManager.updateProfileName(sock, name);
+                updated.push('Display Name');
+            }
+            if (typeof about === 'string' && about.trim().length > 0) {
+                await baileysManager.updateProfileAbout(sock, about);
+                updated.push('Bio / About');
+            }
+            if (updated.length === 0) {
+                return res.status(400).json({ success: false, error: 'Provide name or about text to update.' });
+            }
+            const profile = await baileysManager.getOwnProfile(sock);
+            res.json({
+                success: true,
+                message: `Updated ${updated.join(' & ')} on WhatsApp!`,
+                ...profile
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: err.message || 'Failed updating profile.' });
+        }
+    });
+
+    // ── Native WhatsApp Privacy + FM-WhatsApp Ghost Privacy ──────────────
+    router.get('/privacy/settings', async (req, res) => {
+        try {
+            const sock = baileysManager.getActiveSocket();
+            const data = await baileysManager.getPrivacySettings(sock);
+            res.json({
+                success: true,
+                connected: Boolean(sock),
+                ...data
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: err.message || 'Failed loading privacy settings.' });
+        }
+    });
+
+    router.post('/privacy/settings', async (req, res) => {
+        try {
+            const sock = baileysManager.getActiveSocket();
+            const result = await baileysManager.updatePrivacySettings(sock, req.body || {});
+            res.json({
+                success: true,
+                message: result.applied.length > 0
+                    ? `Saved: ${result.applied.join(', ')}`
+                    : 'Privacy settings saved.',
+                privacy: result.privacy,
+                ghostPrivacy: result.ghostPrivacy
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: err.message || 'Failed saving privacy settings.' });
+        }
+    });
+
+    // ── Chat-Level Actions (Mute, Pin, Archive, Disappearing, Block, Clear)
+    router.post('/chat/action', async (req, res) => {
+        try {
+            const { recipient, action, value = null } = req.body || {};
+            const jid = toWhatsAppJid(recipient);
+            if (!jid || !action) {
+                return res.status(400).json({ success: false, error: 'Recipient and action are required.' });
+            }
+            const sock = requireActiveSocket(res);
+            if (!sock) return;
+
+            const result = await baileysManager.performChatAction(sock, jid, action, value);
+            res.json({
+                success: true,
+                message: result.message,
+                chatMeta: result.chatMeta
+            });
+        } catch (err) {
+            res.status(422).json({ success: false, error: err.message || 'Chat action failed.' });
+        }
+    });
+
+    // ── Chat Export & Full Backup Snapshot ───────────────────────────────
+    router.get('/chat/export', (req, res) => {
+        const number = String(req.query.number || req.query.jid || '').trim();
+        if (!number) {
+            return res.status(400).json({ success: false, error: 'Chat number or JID is required.' });
+        }
+        const exported = store.exportChatTranscript(number);
+        res.json({ success: true, ...exported });
+    });
+
+    router.get('/backup/export', (req, res) => {
+        const snapshot = store.exportFullBackup();
+        res.json({ success: true, ...snapshot });
+    });
+
+    // ── Integrated Bot Commands Catalog ──────────────────────────────────
+    router.get('/bot/commands', (req, res) => {
+        res.json({
+            success: true,
+            commands: [
+                { command: '.play', usage: '.play <song name or link>', title: 'Play Song (MP3)', category: 'Media', description: 'Downloads & sends direct MP3 audio + interactive buttons' },
+                { command: '.video', usage: '.video <video title or link>', title: 'Video Song (MP4)', category: 'Media', description: 'Downloads & sends YouTube MP4 video + interactive buttons' },
+                { command: '.tiktok', usage: '.tiktok <url>', title: 'TikTok HD Video', category: 'Social', description: 'Downloads watermark-free TikTok video directly in chat' },
+                { command: '.fb', usage: '.fb <url>', title: 'Facebook Video', category: 'Social', description: 'Downloads Facebook Reels & videos directly in chat' },
+                { command: '.ig', usage: '.ig <url>', title: 'Instagram Reel/Post', category: 'Social', description: 'Downloads Instagram Reels & media directly in chat' },
+                { command: '.dl', usage: '.dl <any url>', title: 'Universal Downloader', category: 'Media', description: 'Auto-detects platform and downloads video/audio/GIF' },
+                { command: '.number', usage: '.number <phone>', title: 'Number Details Report', category: 'Tools', description: 'Fetches Truecaller + SIM DB + WhatsApp Profile & sends to chat' },
+                { command: '.buttons', usage: 'Interactive Buttons Tool', title: 'Interactive Buttons', category: 'WhatsApp', description: 'Compose native interactive reply buttons' },
+                { command: '.ptv', usage: 'Circular Video Note', title: 'Video Note (PTV)', category: 'WhatsApp', description: 'Send circular round WhatsApp video note' },
+                { command: '.ptt', usage: 'Voice Note', title: 'Voice Note (PTT)', category: 'WhatsApp', description: 'Record or send audio as WhatsApp voice note' },
+                { command: '.loc', usage: 'Fake Live Location', title: 'Fake Location', category: 'WhatsApp', description: 'Send custom GPS pin or live location' },
+                { command: '.fdp', usage: 'Full Resolution DP', title: 'Full Uncropped DP (.fdp)', category: 'Account', description: 'Set 100% uncropped profile picture at original resolution' },
+                { command: '.menu', usage: '.menu', title: 'Send Bot Menu', category: 'Tools', description: 'Sends formatted command reference into chat' }
+            ]
+        });
     });
 
     return router;

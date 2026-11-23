@@ -36,6 +36,7 @@ fun NumberDetailsSheet(
     result: NumberLookupResponse?,
     errorMessage: String?,
     onSearch: (String) -> Unit,
+    onSendToChat: ((NumberLookupResponse) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     var queryInput by remember(initialNumber) {
@@ -352,6 +353,34 @@ fun NumberDetailsSheet(
                     }
                     if (result.whatsapp.about.isNotBlank()) {
                         DetailInfoLine("Bio / About", result.whatsapp.about)
+                    }
+                }
+
+                if (onSendToChat != null) {
+                    Spacer(Modifier.height(14.dp))
+                    Button(
+                        onClick = { onSendToChat(result) },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = EmeraldGlow,
+                            contentColor = ObsidianBase
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("number_details_send_to_chat_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Send,
+                            contentDescription = "Send report to chat",
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Send Number Details to Chat",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }

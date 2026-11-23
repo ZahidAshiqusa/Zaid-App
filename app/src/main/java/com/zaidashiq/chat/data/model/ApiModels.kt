@@ -12,7 +12,7 @@ data class HealthResponse(
 @Serializable
 data class BotStatusResponse(
     val status: String = "running",
-    val botName: String = "Zaid Ashiq Chat",
+    val botName: String = "Aujla Chat App",
     val uptimeFormatted: String = "",
     val connectedSessions: List<String> = emptyList(),
     val activeSessionId: String? = null
@@ -427,3 +427,120 @@ data class LoadOlderChatsResponse(
     val message: String? = null,
     val error: String? = null
 )
+
+@Serializable
+data class GhostPrivacyPayload(
+    val freezeOnlinePresence: Boolean = true,
+    val ghostStatusView: Boolean = true,
+    val hideBlueTicks: Boolean = true,
+    val hideTypingIndicator: Boolean = true
+)
+
+@Serializable
+data class NativePrivacyPayload(
+    val lastSeen: String = "contacts",
+    val online: String = "match_last_seen",
+    val profile: String = "all",
+    val status: String = "contacts",
+    val readReceipts: String = "all",
+    val groupAdd: String = "contacts",
+    val defaultDisappearing: Int = 0
+)
+
+@Serializable
+data class AccountProfileResponse(
+    val success: Boolean = false,
+    val connected: Boolean = false,
+    val jid: String = "",
+    val phone: String = "",
+    val pushName: String = "",
+    val about: String = "",
+    val profilePicUrl: String = "",
+    val privacy: NativePrivacyPayload = NativePrivacyPayload(),
+    val ghostPrivacy: GhostPrivacyPayload = GhostPrivacyPayload(),
+    val message: String? = null,
+    val error: String? = null
+)
+
+@Serializable
+data class UpdateProfileRequest(
+    val name: String? = null,
+    val about: String? = null
+)
+
+@Serializable
+data class PrivacySettingsResponse(
+    val success: Boolean = false,
+    val connected: Boolean = false,
+    val privacy: NativePrivacyPayload = NativePrivacyPayload(),
+    val ghostPrivacy: GhostPrivacyPayload = GhostPrivacyPayload(),
+    val message: String? = null,
+    val error: String? = null
+)
+
+@Serializable
+data class UpdatePrivacyRequest(
+    val privacy: NativePrivacyPayload? = null,
+    val ghostPrivacy: GhostPrivacyPayload? = null
+)
+
+@Serializable
+data class ChatMetaPayload(
+    val muted: Boolean = false,
+    val pinned: Boolean = false,
+    val archived: Boolean = false,
+    val disappearingSeconds: Int = 0,
+    val blocked: Boolean = false
+)
+
+@Serializable
+data class ChatActionRequest(
+    val recipient: String,
+    val action: String,
+    val value: Int? = null
+)
+
+@Serializable
+data class ChatActionResponse(
+    val success: Boolean = false,
+    val message: String? = null,
+    val chatMeta: ChatMetaPayload = ChatMetaPayload(),
+    val error: String? = null
+)
+
+@Serializable
+data class ChatExportResponse(
+    val success: Boolean = false,
+    val contactName: String = "",
+    val cleanNumber: String = "",
+    val messageCount: Int = 0,
+    val transcript: String = "",
+    val error: String? = null
+)
+
+@Serializable
+data class FullBackupResponse(
+    val success: Boolean = false,
+    val generatedAt: String = "",
+    val totalChats: Int = 0,
+    val totalMessages: Int = 0,
+    val totalContacts: Int = 0,
+    val summaryText: String = "",
+    val error: String? = null
+)
+
+@Serializable
+data class BotCommandItem(
+    val command: String = "",
+    val usage: String = "",
+    val title: String = "",
+    val category: String = "",
+    val description: String = ""
+)
+
+@Serializable
+data class BotCommandsResponse(
+    val success: Boolean = false,
+    val commands: List<BotCommandItem> = emptyList()
+)
+

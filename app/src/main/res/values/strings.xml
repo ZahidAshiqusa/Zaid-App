@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Zaid Ashiq Chat</string>
+    <string name="app_name">Aujla Chat App</string>
 
     <!-- Pairing Screen -->
     <string name="pairing_title">Link Your WhatsApp</string>
@@ -33,24 +33,30 @@
     <string name="menu_auto_status">Auto-Status View &amp; React</string>
     <string name="menu_full_pp">Full Profile Picture Tool</string>
     <string name="menu_channel_react">Channel Auto-React Rules</string>
+    <string name="menu_privacy_account">Account, Ghost Privacy &amp; Backup</string>
+    <string name="menu_bot_commands">All Bot Commands &amp; Integrations</string>
+    <string name="menu_clear_old_chats">Clear All Old Chats</string>
     <string name="menu_connection_settings">Session &amp; Connection</string>
 
     <!-- Chat Screen & + Power Menu -->
-    <string name="chat_input_placeholder">Message, paste song link, or .play…</string>
-    <string name="chat_play_mode_badge">Direct Song Mode • Sends MP3 + buttons (no text)</string>
-    <string name="chat_song_link_badge">Song Link Detected • Downloads &amp; sends MP3 + buttons</string>
+    <string name="chat_input_placeholder">Message, paste link, or .play / .menu…</string>
+    <string name="chat_play_mode_badge">Direct Bot Command • Sends media / report directly</string>
+    <string name="chat_song_link_badge">Media Link Detected • Downloads &amp; sends directly</string>
     <string name="chat_direct_media_loading">Sending direct media…</string>
     <string name="tool_number_details">Number Details</string>
+    <string name="tool_bot_commands">Bot Commands (.menu)</string>
+    <string name="tool_full_dp">Full Uncropped DP (.fdp)</string>
+    <string name="tool_ghost_privacy">Ghost Privacy &amp; Account</string>
     <string name="tool_video_note">Video Note</string>
     <string name="tool_voice_note">Voice Note</string>
     <string name="tool_fake_location">Fake Location</string>
     <string name="tool_button_messages">Button Messages</string>
-    <string name="tool_song">Song</string>
-    <string name="tool_video">Video</string>
-    <string name="tool_tiktok">TikTok</string>
-    <string name="tool_facebook">Facebook</string>
-    <string name="tool_instagram">Instagram</string>
-    <string name="tool_downloader">Downloader</string>
+    <string name="tool_song">Song (.play)</string>
+    <string name="tool_video">Video (.video)</string>
+    <string name="tool_tiktok">TikTok (.tt)</string>
+    <string name="tool_facebook">Facebook (.fb)</string>
+    <string name="tool_instagram">Instagram (.ig)</string>
+    <string name="tool_downloader">Downloader &amp; GIFs</string>
 
     <!-- New Button Message Screen -->
     <string name="button_composer_back">Back</string>

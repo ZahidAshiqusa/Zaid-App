@@ -81,6 +81,10 @@ class ChatRepository(
         }
     }
 
+    suspend fun clearAllChats(): Result<GenericActionResponse> = withContext(Dispatchers.IO) {
+        safeCall { api().clearAllChats() }
+    }
+
     suspend fun lookupNumber(number: String): Result<NumberLookupResponse> = withContext(Dispatchers.IO) {
         safeCall { api().lookupNumber(number) }
     }
@@ -344,5 +348,45 @@ class ChatRepository(
 
     suspend fun triggerCloudSync(): Result<CloudSyncResponse> = withContext(Dispatchers.IO) {
         safeCall { api().triggerCloudSync() }
+    }
+
+    suspend fun getAccountProfile(): Result<AccountProfileResponse> = withContext(Dispatchers.IO) {
+        safeCall { api().getAccountProfile() }
+    }
+
+    suspend fun updateAccountProfile(name: String? = null, about: String? = null): Result<AccountProfileResponse> =
+        withContext(Dispatchers.IO) {
+            safeCall { api().updateAccountProfile(UpdateProfileRequest(name = name, about = about)) }
+        }
+
+    suspend fun getPrivacySettings(): Result<PrivacySettingsResponse> = withContext(Dispatchers.IO) {
+        safeCall { api().getPrivacySettings() }
+    }
+
+    suspend fun updatePrivacySettings(
+        privacy: NativePrivacyPayload? = null,
+        ghostPrivacy: GhostPrivacyPayload? = null
+    ): Result<PrivacySettingsResponse> = withContext(Dispatchers.IO) {
+        safeCall { api().updatePrivacySettings(UpdatePrivacyRequest(privacy = privacy, ghostPrivacy = ghostPrivacy)) }
+    }
+
+    suspend fun performChatAction(
+        recipient: String,
+        action: String,
+        value: Int? = null
+    ): Result<ChatActionResponse> = withContext(Dispatchers.IO) {
+        safeCall { api().performChatAction(ChatActionRequest(recipient = recipient, action = action, value = value)) }
+    }
+
+    suspend fun exportChatTranscript(numberOrJid: String): Result<ChatExportResponse> = withContext(Dispatchers.IO) {
+        safeCall { api().exportChatTranscript(numberOrJid) }
+    }
+
+    suspend fun exportFullBackup(): Result<FullBackupResponse> = withContext(Dispatchers.IO) {
+        safeCall { api().exportFullBackup() }
+    }
+
+    suspend fun getBotCommands(): Result<BotCommandsResponse> = withContext(Dispatchers.IO) {
+        safeCall { api().getBotCommands() }
     }
 }

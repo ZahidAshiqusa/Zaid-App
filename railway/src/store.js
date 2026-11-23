@@ -28,7 +28,14 @@ const DEFAULT_STATE = {
         emoji: '💚',
         replyMessage: 'Nice status!'
     },
-    channelRules: []     // Array<{ id, jid, channelUrl, name, emojis, active }>
+    channelRules: [],     // Array<{ id, jid, channelUrl, name, emojis, active }>
+    ghostPrivacy: {
+        freezeOnlinePresence: true,
+        ghostStatusView: true,
+        hideBlueTicks: true,
+        hideTypingIndicator: true
+    },
+    chatMeta: {}         // jid -> { muted, pinned, archived, disappearingSeconds, blocked }
 };
 
 class AppStore {
@@ -47,8 +54,10 @@ class AppStore {
                     ...DEFAULT_STATE,
                     ...parsed,
                     lastSeenMap: parsed.lastSeenMap || {},
+                    chatMeta: parsed.chatMeta || {},
                     vaultSettings: { ...DEFAULT_STATE.vaultSettings, ...(parsed.vaultSettings || {}) },
-                    autoReactConfig: { ...DEFAULT_STATE.autoReactConfig, ...(parsed.autoReactConfig || {}) }
+                    autoReactConfig: { ...DEFAULT_STATE.autoReactConfig, ...(parsed.autoReactConfig || {}) },
+                    ghostPrivacy: { ...DEFAULT_STATE.ghostPrivacy, ...(parsed.ghostPrivacy || {}) }
                 };
             }
         } catch (err) {
@@ -114,7 +123,7 @@ class AppStore {
         try {
             const { rows } = await this.pool.query(
                 'SELECT key, payload FROM zaid_chat_kv WHERE key = ANY($1)',
-                [['vaultSettings', 'autoReactConfig', 'channelRules']]
+                [['vaultSettings', 'autoReactConfig', 'channelRules', 'ghostPrivacy']]
             );
             for (const row of rows) {
                 if (row.key === 'vaultSettings' && row.payload) {
@@ -123,6 +132,8 @@ class AppStore {
                     this.state.autoReactConfig = { ...DEFAULT_STATE.autoReactConfig, ...row.payload };
                 } else if (row.key === 'channelRules' && Array.isArray(row.payload)) {
                     this.state.channelRules = row.payload;
+                } else if (row.key === 'ghostPrivacy' && row.payload) {
+                    this.state.ghostPrivacy = { ...DEFAULT_STATE.ghostPrivacy, ...row.payload };
                 }
             }
             this.saveLocalNow();
@@ -136,7 +147,8 @@ class AppStore {
         const pairs = [
             ['vaultSettings', this.state.vaultSettings],
             ['autoReactConfig', this.state.autoReactConfig],
-            ['channelRules', this.state.channelRules]
+            ['channelRules', this.state.channelRules],
+            ['ghostPrivacy', this.state.ghostPrivacy]
         ];
         for (const [key, payload] of pairs) {
             await this.pool.query(
@@ -434,8 +446,10 @@ class AppStore {
     }
 
     addCapturedStatus(item) {
+        const id = item.id || `st_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        this.state.capturedStatuses = this.state.capturedStatuses.filter(s => s.id !== id);
         this.state.capturedStatuses.unshift({
-            id: item.id || `st_${Date.now()}`,
+            id,
             senderName: item.senderName || 'Contact',
             senderNumber: item.senderNumber || '',
             senderJid: item.senderJid || '',
@@ -450,8 +464,10 @@ class AppStore {
     }
 
     addVaultItem(item) {
+        const id = item.id || `vault_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        this.state.vaultItems = this.state.vaultItems.filter(v => v.id !== id);
         this.state.vaultItems.unshift({
-            id: item.id || `vault_${Date.now()}`,
+            id,
             type: item.type || 'deleted',
             senderName: item.senderName || 'Unknown',
             senderNumber: item.senderNumber || '',
@@ -472,8 +488,10 @@ class AppStore {
     }
 
     addCallRecord(call) {
+        const id = call.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        this.state.calls = this.state.calls.filter(c => c.id !== id);
         this.state.calls.unshift({
-            id: call.id || `call_${Date.now()}`,
+            id,
             callerJid: call.callerJid || '',
             callerName: call.callerName || call.callerNumber || 'Unknown',
             callerNumber: call.callerNumber || '',
@@ -538,6 +556,115 @@ class AppStore {
         this.state.channelRules = this.state.channelRules.filter(r => r.id !== id && r.jid !== id);
         this._scheduleSave();
         this.pushConfigToPostgres().catch(() => {});
+    }
+
+    updateGhostPrivacy(partial = {}) {
+        const cur = this.state.ghostPrivacy || DEFAULT_STATE.ghostPrivacy;
+        this.state.ghostPrivacy = {
+            freezeOnlinePresence: partial.freezeOnlinePresence !== undefined ? Boolean(partial.freezeOnlinePresence) : cur.freezeOnlinePresence,
+            ghostStatusView: partial.ghostStatusView !== undefined ? Boolean(partial.ghostStatusView) : cur.ghostStatusView,
+            hideBlueTicks: partial.hideBlueTicks !== undefined ? Boolean(partial.hideBlueTicks) : cur.hideBlueTicks,
+            hideTypingIndicator: partial.hideTypingIndicator !== undefined ? Boolean(partial.hideTypingIndicator) : cur.hideTypingIndicator
+        };
+        this._scheduleSave();
+        this.pushConfigToPostgres().catch(() => {});
+        return this.state.ghostPrivacy;
+    }
+
+    getChatMeta(jid) {
+        if (!this.state.chatMeta) this.state.chatMeta = {};
+        return this.state.chatMeta[jid] || {
+            muted: false,
+            pinned: false,
+            archived: false,
+            disappearingSeconds: 0,
+            blocked: false
+        };
+    }
+
+    updateChatMeta(jid, partial = {}) {
+        if (!jid) return {};
+        if (!this.state.chatMeta) this.state.chatMeta = {};
+        const prev = this.getChatMeta(jid);
+        this.state.chatMeta[jid] = { ...prev, ...partial };
+        this._scheduleSave();
+        return this.state.chatMeta[jid];
+    }
+
+    clearChatMessages(jidOrNumber) {
+        const key = this.normalizeChatKey(jidOrNumber);
+        if (!key) return;
+        this.state.messages[key] = [];
+        const jid = String(jidOrNumber).includes('@') ? jidOrNumber : `${key}@s.whatsapp.net`;
+        if (this.state.chats[jid]) {
+            this.state.chats[jid].lastMessage = 'Chat history cleared';
+            this.state.chats[jid].messageCount = 0;
+            this.state.chats[jid].unreadCount = 0;
+        }
+        this._scheduleSave();
+    }
+
+    clearAllChats() {
+        this.state.chats = {};
+        this.state.messages = {};
+        this.state.capturedStatuses = [];
+        this.state.calls = [];
+        this.saveLocalNow();
+    }
+
+    exportChatTranscript(jidOrNumber) {
+        const data = this.getChatMessages(jidOrNumber);
+        const header = [
+            `=== Aujla Chat App Backup ===`,
+            `Contact: ${data.contactName} (+${data.cleanNumber})`,
+            `Exported At: ${new Date().toISOString()}`,
+            `Total Messages: ${data.messages.length}`,
+            `=============================`,
+            ''
+        ].join('\n');
+
+        const lines = data.messages.map(m => {
+            const stamp = m.isoTime || new Date(m.timestamp || Date.now()).toISOString();
+            const who = m.fromMe ? 'You' : (m.senderName || data.contactName);
+            const tag = m.mediaType && m.mediaType !== 'text' ? `[${m.mediaType.toUpperCase()}] ` : '';
+            return `[${stamp}] ${who}: ${tag}${m.text}`;
+        });
+
+        return {
+            contactName: data.contactName,
+            cleanNumber: data.cleanNumber,
+            messageCount: data.messages.length,
+            transcript: header + (lines.length ? lines.join('\n') : '(No messages recorded in this chat yet)')
+        };
+    }
+
+    exportFullBackup() {
+        const chats = this.getChatsList();
+        const totalMessages = Object.values(this.state.messages || {}).reduce(
+            (sum, list) => sum + (Array.isArray(list) ? list.length : 0),
+            0
+        );
+        const summaryLines = [
+            `=== Aujla Chat App — Full Backup Snapshot ===`,
+            `Generated: ${new Date().toISOString()}`,
+            `Total Chats: ${chats.length}`,
+            `Total Messages: ${totalMessages}`,
+            `Total Contacts: ${Object.keys(this.state.contacts || {}).length}`,
+            `Channel Auto-React Rules: ${(this.state.channelRules || []).length}`,
+            `Vault Recovered Items: ${(this.state.vaultItems || []).length}`,
+            `=============================================`,
+            '',
+            ...chats.slice(0, 40).map((c, idx) =>
+                `${idx + 1}. ${c.contactName || c.name} (+${c.cleanNumber}) — ${c.messageCount || 0} msgs | Last: ${String(c.lastMessage || '').slice(0, 60)}`
+            )
+        ];
+        return {
+            generatedAt: new Date().toISOString(),
+            totalChats: chats.length,
+            totalMessages,
+            totalContacts: Object.keys(this.state.contacts || {}).length,
+            summaryText: summaryLines.join('\n')
+        };
     }
 }
 

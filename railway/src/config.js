@@ -30,7 +30,7 @@ module.exports = {
     TMP_DIR,
     port: parseInt(cleanEnv('PORT', '3000'), 10) || 3000,
     corsOrigin: cleanEnv('CORS_ORIGIN', '*'),
-    appName: cleanEnv('APP_NAME', 'Zaid Ashiq Chat'),
+    appName: cleanEnv('APP_NAME', 'Aujla Chat App'),
     ownerNumber: cleanEnv('OWNER_NUMBER', '').replace(/\D/g, ''),
     timezone: cleanEnv('TIMEZONE', 'Asia/Karachi'),
     databaseUrl,

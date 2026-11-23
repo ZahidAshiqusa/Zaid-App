@@ -35,3 +35,6 @@ object ChannelReactRoute
 
 @Serializable
 object ConnectionRoute
+
+@Serializable
+object PrivacyAccountRoute

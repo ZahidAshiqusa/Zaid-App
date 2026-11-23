@@ -1,8 +1,14 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const axios = require('axios');
 const yts = require('yt-search');
 const config = require('./config');
+
+const execFileAsync = promisify(execFile);
 
 let ruhendScraper = null;
 try {
@@ -22,24 +28,66 @@ const CNV_HEADERS = {
     accept: '*/*'
 };
 
-async function downloadBufferFromUrl(url, extraHeaders = {}) {
+let ytDlpAvailableCache = null;
+
+async function isYtDlpAvailable() {
+    if (ytDlpAvailableCache !== null) return ytDlpAvailableCache;
+    try {
+        await execFileAsync('yt-dlp', ['--version'], { timeout: 5000 });
+        ytDlpAvailableCache = true;
+    } catch (_) {
+        ytDlpAvailableCache = false;
+    }
+    return ytDlpAvailableCache;
+}
+
+function looksLikeTextOrHtml(buffer, contentType = '') {
+    if (!buffer || buffer.length === 0) return true;
+    const ct = String(contentType || '').toLowerCase();
+    if (ct.includes('text/html') || ct.includes('application/json') || ct.includes('text/plain') || ct.includes('application/xml')) {
+        return true;
+    }
+    const head = buffer.subarray(0, Math.min(256, buffer.length)).toString('utf8').trimStart();
+    if (
+        head.startsWith('<!DOCTYPE') ||
+        head.startsWith('<html') ||
+        head.startsWith('<HTML') ||
+        head.startsWith('<?xml') ||
+        (head.startsWith('{') && (head.includes('"error"') || head.includes('"status"') || head.includes('"message"')))
+    ) {
+        return true;
+    }
+    return false;
+}
+
+function validateMediaBuffer(buffer, contentType, expectedKind = 'any') {
+    const minSize = expectedKind === 'image' ? 512 : 4096;
+    if (!buffer || buffer.length < minSize) {
+        throw new Error(`Downloaded ${expectedKind} file is too small (${buffer?.length || 0} bytes).`);
+    }
+    if (looksLikeTextOrHtml(buffer, contentType)) {
+        throw new Error(`Provider returned HTML/JSON error page instead of ${expectedKind} media.`);
+    }
+    return true;
+}
+
+async function downloadBufferFromUrl(url, extraHeaders = {}, expectedKind = 'any') {
     const response = await axios.get(url, {
         responseType: 'arraybuffer',
-        timeout: 60000,
-        maxContentLength: 80 * 1024 * 1024,
+        timeout: 65000,
+        maxRedirects: 6,
+        maxContentLength: 85 * 1024 * 1024,
+        validateStatus: (status) => status >= 200 && status < 400,
         headers: {
             'User-Agent': MOBILE_UA,
+            Accept: '*/*',
             ...extraHeaders
         }
     });
     const buffer = Buffer.from(response.data);
-    if (!buffer || buffer.length < 256) {
-        throw new Error('Downloaded media stream was empty or corrupted.');
-    }
-    return {
-        buffer,
-        contentType: String(response.headers['content-type'] || '')
-    };
+    const contentType = String(response.headers['content-type'] || '');
+    validateMediaBuffer(buffer, contentType, expectedKind);
+    return { buffer, contentType };
 }
 
 function isDirectAudioUrl(input) {
@@ -114,7 +162,9 @@ async function resolveYoutubeInfo(queryOrUrl) {
     }
 
     const search = await yts(trimmed);
-    const first = search?.videos?.[0];
+    const videos = Array.isArray(search?.videos) ? search.videos : [];
+    // Prefer standard tracks under 20 minutes when searching by song name
+    const first = videos.find(v => (v.seconds || 0) > 0 && (v.seconds || 0) <= 1200) || videos[0];
     if (!first) {
         throw new Error(`No YouTube results found for "${trimmed}".`);
     }
@@ -129,44 +179,132 @@ async function resolveYoutubeInfo(queryOrUrl) {
     };
 }
 
-async function fetchYoutubeStreamUrl(youtubeUrl, mode) {
-    // 1. Primary: yt-down-pari API
+function cleanupTempFiles(prefix) {
     try {
-        const res = await axios.post(
-            YT_PARI_API_URL,
-            { url: youtubeUrl },
-            {
-                timeout: 22000,
-                headers: {
-                    'Content-Type': 'application/json',
-                    Accept: 'application/json',
-                    'User-Agent': MOBILE_UA
-                }
+        if (!fs.existsSync(config.TMP_DIR)) return;
+        for (const f of fs.readdirSync(config.TMP_DIR)) {
+            if (f.startsWith(prefix)) {
+                fs.rmSync(path.join(config.TMP_DIR, f), { force: true });
             }
-        );
-        const dataNode = res.data?.result?.data || res.data?.data || {};
-        const medias = Array.isArray(dataNode.medias) ? dataNode.medias : [];
-        const unlocked = medias.filter(m => m && m.url && m.locked !== true && String(m.url).startsWith('http'));
-
-        if (mode === 'audio') {
-            const audioItem =
-                unlocked.find(m => /audio/i.test(m.type || '') || /mp3|m4a/i.test(m.extension || '')) ||
-                unlocked[0];
-            if (audioItem?.url) return { url: audioItem.url, headers: {} };
-        } else {
-            const videoItem =
-                unlocked.find(m => /video/i.test(m.type || '') && /mp4/i.test(m.extension || '')) ||
-                unlocked.find(m => /video/i.test(m.type || '')) ||
-                unlocked[0];
-            if (videoItem?.url) return { url: videoItem.url, headers: {} };
         }
-    } catch (err) {
-        console.warn('[media] yt-down-pari failed, trying fallback:', err.message);
+    } catch (_) {}
+}
+
+/**
+ * Native yt-dlp + ffmpeg downloader (Zero dependency on unreliable third-party scrapers).
+ * Supports YouTube (audio MP3 / video MP4), TikTok, Facebook, Instagram, SoundCloud, etc.
+ */
+async function downloadWithYtDlp(targetUrl, mode = 'audio', isYoutube = true) {
+    const available = await isYtDlpAvailable();
+    if (!available) {
+        throw new Error('yt-dlp binary is not installed in container.');
     }
 
-    // 2. Fallback: cnv.cx converter tunnel
+    fs.mkdirSync(config.TMP_DIR, { recursive: true });
+    const runId = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const outTemplate = path.join(config.TMP_DIR, `${runId}.%(ext)s`);
+
+    // Optional cookies support if configured via Railway env var YT_COOKIES_B64
+    let cookiesPath = null;
+    if (process.env.YT_COOKIES_B64) {
+        try {
+            cookiesPath = path.join(config.TMP_DIR, `${runId}_cookies.txt`);
+            fs.writeFileSync(cookiesPath, Buffer.from(process.env.YT_COOKIES_B64, 'base64').toString('utf8'), 'utf8');
+        } catch (_) {
+            cookiesPath = null;
+        }
+    }
+
+    const clientStrategies = isYoutube
+        ? [
+            ['--extractor-args', 'youtube:player_client=android_vr,ios'],
+            ['--extractor-args', 'youtube:player_client=tv_embedded,mweb'],
+            ['--extractor-args', 'youtube:player_client=android,web']
+        ]
+        : [[]];
+
+    let lastError = null;
     try {
-        const keyRes = await axios.get(CNV_KEY_URL, { headers: CNV_HEADERS, timeout: 15000 });
+        for (const extraStrategy of clientStrategies) {
+            cleanupTempFiles(`${runId}.`);
+            const args = [
+                '--no-playlist',
+                '--no-warnings',
+                '--no-check-certificates',
+                '--geo-bypass',
+                '--socket-timeout', '25',
+                '--retries', '2',
+                '--max-filesize', mode === 'audio' ? '45M' : '65M',
+                ...extraStrategy
+            ];
+
+            if (cookiesPath) {
+                args.push('--cookies', cookiesPath);
+            }
+            if (process.env.YT_DLP_PROXY) {
+                args.push('--proxy', process.env.YT_DLP_PROXY);
+            }
+
+            if (mode === 'audio') {
+                args.push(
+                    '-f', 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
+                    '-x',
+                    '--audio-format', 'mp3',
+                    '--audio-quality', '128K',
+                    '-o', outTemplate,
+                    targetUrl
+                );
+            } else {
+                args.push(
+                    '-f', 'best[height<=480][ext=mp4]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    '--merge-output-format', 'mp4',
+                    '-o', outTemplate,
+                    targetUrl
+                );
+            }
+
+            try {
+                await execFileAsync('yt-dlp', args, { timeout: 90000, maxBuffer: 4 * 1024 * 1024 });
+                const produced = fs.readdirSync(config.TMP_DIR)
+                    .filter(f => f.startsWith(`${runId}.`) && !f.endsWith('.part') && !f.endsWith('.ytdl'));
+                const targetFile =
+                    produced.find(f => f.endsWith(mode === 'audio' ? '.mp3' : '.mp4')) ||
+                    produced[0];
+
+                if (targetFile) {
+                    const fullPath = path.join(config.TMP_DIR, targetFile);
+                    const buf = fs.readFileSync(fullPath);
+                    validateMediaBuffer(buf, mode === 'audio' ? 'audio/mpeg' : 'video/mp4', mode);
+                    const ext = path.extname(targetFile).toLowerCase();
+                    const mime = mode === 'audio'
+                        ? (ext === '.m4a' ? 'audio/mp4' : 'audio/mpeg')
+                        : 'video/mp4';
+                    console.log(`[media] yt-dlp succeeded (${mode}, ${(buf.length / 1024).toFixed(0)} KB)`);
+                    return { buffer: buf, contentType: mime };
+                }
+            } catch (err) {
+                lastError = err;
+                console.warn(`[media] yt-dlp strategy failed:`, (err.stderr || err.message || '').slice(0, 200));
+            }
+        }
+    } finally {
+        cleanupTempFiles(runId);
+    }
+
+    throw lastError || new Error('yt-dlp extraction failed.');
+}
+
+/**
+ * Validated Multi-Provider REST Waterfall for YouTube Audio/Video.
+ * CRITICAL: Every provider's URL is downloaded & validated INSIDE the loop so a broken/HTML URL
+ * never aborts the fallback chain or triggers HTTP 500!
+ */
+async function downloadYoutubeViaApis(youtubeUrl, mode) {
+    const errors = [];
+
+    // Candidate 1: cnv.cx converter tunnel (reliable direct MP3/MP4)
+    try {
+        const keyRes = await axios.get(CNV_KEY_URL, { headers: CNV_HEADERS, timeout: 12000 });
         const sanityKey = keyRes.data?.key;
         if (sanityKey) {
             const body = new URLSearchParams({
@@ -185,53 +323,110 @@ async function fetchYoutubeStreamUrl(youtubeUrl, mode) {
                 }
             });
             const tunnelUrl = convRes.data?.url;
-            if (tunnelUrl) {
-                return { url: tunnelUrl, headers: CNV_HEADERS };
+            if (tunnelUrl && /^https?:\/\//i.test(tunnelUrl)) {
+                return await downloadBufferFromUrl(tunnelUrl, CNV_HEADERS, mode);
             }
         }
     } catch (err) {
-        console.warn('[media] cnv.cx fallback failed:', err.message);
+        errors.push(`cnv.cx: ${err.message}`);
     }
 
-    // 3. Fallback: GiftedTech / NexOracle / DavidCyril MP3 & MP4 APIs
-    const extraEndpoints = mode === 'audio'
+    // Candidate 2: Multi-provider direct JSON APIs
+    const apiEndpoints = mode === 'audio'
         ? [
+            `https://api.vreden.my.id/api/ytmp3?url=${encodeURIComponent(youtubeUrl)}`,
+            `https://api.siputzx.my.id/api/d/ytmp3?url=${encodeURIComponent(youtubeUrl)}`,
             `https://api.giftedtech.web.id/api/download/dlmp3?apikey=gifted&url=${encodeURIComponent(youtubeUrl)}`,
+            `https://apis.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(youtubeUrl)}`,
             `https://api.nexoracle.com/downloader/yt-audio2?apikey=free_key@maher_apis&url=${encodeURIComponent(youtubeUrl)}`,
-            `https://apis.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(youtubeUrl)}`
+            `https://api.agatz.xyz/api/ytmp3?url=${encodeURIComponent(youtubeUrl)}`
         ]
         : [
+            `https://api.vreden.my.id/api/ytmp4?url=${encodeURIComponent(youtubeUrl)}`,
+            `https://api.siputzx.my.id/api/d/ytmp4?url=${encodeURIComponent(youtubeUrl)}`,
             `https://api.giftedtech.web.id/api/download/dlmp4?apikey=gifted&url=${encodeURIComponent(youtubeUrl)}`,
+            `https://apis.davidcyriltech.my.id/download/ytmp4?url=${encodeURIComponent(youtubeUrl)}`,
             `https://api.nexoracle.com/downloader/yt-video2?apikey=free_key@maher_apis&url=${encodeURIComponent(youtubeUrl)}`,
-            `https://apis.davidcyriltech.my.id/download/ytmp4?url=${encodeURIComponent(youtubeUrl)}`
+            `https://api.agatz.xyz/api/ytmp4?url=${encodeURIComponent(youtubeUrl)}`
         ];
 
-    for (const ep of extraEndpoints) {
+    for (const ep of apiEndpoints) {
         try {
             const res = await axios.get(ep, {
-                timeout: 22000,
+                timeout: 18000,
                 headers: { 'User-Agent': MOBILE_UA, Accept: 'application/json' }
             });
-            const d = res.data?.result || res.data?.data || res.data || {};
-            const dlUrl = d.download_url || d.downloadUrl || d.audio || d.video || d.url || d.link || '';
+            const d = res.data?.result?.download || res.data?.result || res.data?.data || res.data || {};
+            const dlUrl =
+                d.download_url ||
+                d.downloadUrl ||
+                d.dl ||
+                d.audio ||
+                d.video ||
+                d.url ||
+                d.link ||
+                (Array.isArray(d) ? d[0]?.downloadUrl || d[0]?.url : '') ||
+                '';
             if (typeof dlUrl === 'string' && /^https?:\/\//i.test(dlUrl)) {
-                return { url: dlUrl, headers: {} };
+                return await downloadBufferFromUrl(dlUrl, {}, mode);
             }
         } catch (err) {
-            console.warn('[media] Extra YT fallback failed:', err.message);
+            errors.push(`${ep.split('/')[2]}: ${err.message}`);
         }
     }
 
-    throw new Error(`Could not extract downloadable ${mode === 'audio' ? 'MP3' : 'MP4'} stream from link.`);
+    // Candidate 3: yt-down-pari POST API
+    try {
+        const res = await axios.post(
+            YT_PARI_API_URL,
+            { url: youtubeUrl },
+            {
+                timeout: 18000,
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    'User-Agent': MOBILE_UA
+                }
+            }
+        );
+        const dataNode = res.data?.result?.data || res.data?.data || {};
+        const medias = Array.isArray(dataNode.medias) ? dataNode.medias : [];
+        const unlocked = medias.filter(m => m && m.url && m.locked !== true && String(m.url).startsWith('http'));
+        const preferred = mode === 'audio'
+            ? (unlocked.find(m => /audio/i.test(m.type || '') || /mp3|m4a/i.test(m.extension || '')) || unlocked[0])
+            : (unlocked.find(m => /video/i.test(m.type || '') && /mp4/i.test(m.extension || '')) || unlocked.find(m => /video/i.test(m.type || '')) || unlocked[0]);
+
+        if (preferred?.url) {
+            return await downloadBufferFromUrl(preferred.url, {}, mode);
+        }
+    } catch (err) {
+        errors.push(`yt-down-pari: ${err.message}`);
+    }
+
+    console.warn('[media] All YT REST API providers failed:', errors.join(' | '));
+    throw new Error(`Could not download ${mode === 'audio' ? 'song MP3' : 'video MP4'} right now. Try another song title or link.`);
 }
 
-async function resolveTikTokVideo(url) {
+async function downloadYoutubeBuffer(youtubeUrl, mode = 'audio') {
+    // 1. Primary: Native yt-dlp + ffmpeg inside Railway container (fastest, highest success rate)
+    try {
+        return await downloadWithYtDlp(youtubeUrl, mode, true);
+    } catch (ytDlpErr) {
+        console.warn(`[media] yt-dlp failed for ${mode}, falling back to validated API waterfall:`, ytDlpErr.message);
+    }
+
+    // 2. Fallback: Validated Multi-Provider REST APIs
+    return await downloadYoutubeViaApis(youtubeUrl, mode);
+}
+
+async function downloadTikTokBuffer(url) {
+    // 1. TikWM (fast, HD, no watermark)
     try {
         const res = await axios.post(
             'https://www.tikwm.com/api/',
             new URLSearchParams({ url, hd: '1' }).toString(),
             {
-                timeout: 25000,
+                timeout: 22000,
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'User-Agent': MOBILE_UA
@@ -241,49 +436,122 @@ async function resolveTikTokVideo(url) {
         const data = res.data?.data;
         const videoUrl = data?.hdplay || data?.play || data?.wmplay;
         if (videoUrl) {
-            return {
-                videoUrl,
-                title: data?.title || 'TikTok Video'
-            };
+            const dl = await downloadBufferFromUrl(videoUrl, {}, 'video');
+            return { buffer: dl.buffer, title: data?.title || 'TikTok Video' };
         }
     } catch (err) {
         console.warn('[media] TikWM failed:', err.message);
     }
 
+    // 2. ruhend-scraper fallback
     if (ruhendScraper && typeof ruhendScraper.ttdl === 'function') {
-        const scraped = await ruhendScraper.ttdl(url);
-        const videoUrl = scraped?.video?.[0] || scraped?.hd || scraped?.sd || scraped?.url;
-        if (videoUrl) {
-            return { videoUrl, title: scraped?.title || 'TikTok Video' };
+        try {
+            const scraped = await ruhendScraper.ttdl(url);
+            const videoUrl = scraped?.video?.[0] || scraped?.hd || scraped?.sd || scraped?.url;
+            if (videoUrl) {
+                const dl = await downloadBufferFromUrl(videoUrl, {}, 'video');
+                return { buffer: dl.buffer, title: scraped?.title || 'TikTok Video' };
+            }
+        } catch (err) {
+            console.warn('[media] ruhend ttdl failed:', err.message);
         }
     }
-    throw new Error('Could not extract downloadable TikTok video from that link.');
+
+    // 3. Native yt-dlp fallback
+    const dl = await downloadWithYtDlp(url, 'video', false);
+    return { buffer: dl.buffer, title: 'TikTok Video' };
 }
 
-async function resolveFacebookVideo(url) {
-    if (ruhendScraper && typeof ruhendScraper.fbdl === 'function') {
-        const result = await ruhendScraper.fbdl(url);
-        const list = Array.isArray(result?.data) ? result.data : (Array.isArray(result) ? result : []);
-        const hd = list.find(item => /hd/i.test(item.resolution || item.quality || '')) || list[0];
-        const videoUrl = hd?.url || result?.hd || result?.sd || result?.url;
-        if (videoUrl) {
-            return { videoUrl, title: result?.title || 'Facebook Video' };
-        }
+async function downloadFacebookBuffer(url) {
+    // 1. Native yt-dlp first (very reliable for FB reels/watch/share)
+    try {
+        const dl = await downloadWithYtDlp(url, 'video', false);
+        return { buffer: dl.buffer, title: 'Facebook Video' };
+    } catch (err) {
+        console.warn('[media] yt-dlp Facebook failed, trying scrapers:', err.message);
     }
+
+    // 2. ruhend-scraper fallback
+    if (ruhendScraper && typeof ruhendScraper.fbdl === 'function') {
+        try {
+            const result = await ruhendScraper.fbdl(url);
+            const list = Array.isArray(result?.data) ? result.data : (Array.isArray(result) ? result : []);
+            const hd = list.find(item => /hd/i.test(item.resolution || item.quality || '')) || list[0];
+            const videoUrl = hd?.url || result?.hd || result?.sd || result?.url;
+            if (videoUrl) {
+                const dl = await downloadBufferFromUrl(videoUrl, {}, 'video');
+                return { buffer: dl.buffer, title: result?.title || 'Facebook Video' };
+            }
+        } catch (_) {}
+    }
+
+    // 3. REST API fallback
+    const fbApis = [
+        `https://api.siputzx.my.id/api/d/facebook?url=${encodeURIComponent(url)}`,
+        `https://api.giftedtech.web.id/api/download/facebook?apikey=gifted&url=${encodeURIComponent(url)}`
+    ];
+    for (const ep of fbApis) {
+        try {
+            const res = await axios.get(ep, { timeout: 18000, headers: { 'User-Agent': MOBILE_UA } });
+            const d = res.data?.result || res.data?.data || res.data || {};
+            const videoUrl = d.hd || d.sd || d.video || d.url || (Array.isArray(d) ? d[0]?.url : '');
+            if (videoUrl && /^https?:\/\//i.test(videoUrl)) {
+                const dl = await downloadBufferFromUrl(videoUrl, {}, 'video');
+                return { buffer: dl.buffer, title: d.title || 'Facebook Video' };
+            }
+        } catch (_) {}
+    }
+
     throw new Error('Could not extract downloadable Facebook video from that link.');
 }
 
-async function resolveInstagramMedia(url) {
+async function downloadInstagramBuffer(url) {
+    // 1. ruhend-scraper (handles both photos & reels)
     if (ruhendScraper && typeof ruhendScraper.igdl === 'function') {
-        const result = await ruhendScraper.igdl(url);
-        const list = Array.isArray(result?.data) ? result.data : (Array.isArray(result) ? result : []);
-        if (list.length > 0) {
-            const first = list[0];
-            const mediaUrl = first.url || first.downloadUrl;
-            const isVideo = /\.(mp4|mov|webm)/i.test(mediaUrl) || first.type === 'video' || /\/reel\/|\/tv\//i.test(url);
-            return { mediaUrl, isVideo, title: first.title || 'Instagram Media' };
+        try {
+            const result = await ruhendScraper.igdl(url);
+            const list = Array.isArray(result?.data) ? result.data : (Array.isArray(result) ? result : []);
+            if (list.length > 0) {
+                const first = list[0];
+                const mediaUrl = first.url || first.downloadUrl;
+                if (mediaUrl) {
+                    const isVideo = /\.(mp4|mov|webm)/i.test(mediaUrl) || first.type === 'video' || /\/reel\/|\/tv\//i.test(url);
+                    const dl = await downloadBufferFromUrl(mediaUrl, {}, isVideo ? 'video' : 'image');
+                    return { buffer: dl.buffer, isVideo, title: first.title || 'Instagram Media' };
+                }
+            }
+        } catch (err) {
+            console.warn('[media] ruhend igdl failed:', err.message);
         }
     }
+
+    // 2. Native yt-dlp fallback (works great on public Reels/Videos)
+    try {
+        const dl = await downloadWithYtDlp(url, 'video', false);
+        return { buffer: dl.buffer, isVideo: true, title: 'Instagram Reel' };
+    } catch (err) {
+        console.warn('[media] yt-dlp Instagram failed:', err.message);
+    }
+
+    // 3. REST API fallback
+    const igApis = [
+        `https://api.siputzx.my.id/api/d/igdl?url=${encodeURIComponent(url)}`,
+        `https://api.giftedtech.web.id/api/download/instadl?apikey=gifted&url=${encodeURIComponent(url)}`
+    ];
+    for (const ep of igApis) {
+        try {
+            const res = await axios.get(ep, { timeout: 18000, headers: { 'User-Agent': MOBILE_UA } });
+            const d = res.data?.result || res.data?.data || res.data || {};
+            const first = Array.isArray(d) ? d[0] : d;
+            const mediaUrl = first?.url || first?.download_url || first?.video || first?.image || '';
+            if (mediaUrl && /^https?:\/\//i.test(mediaUrl)) {
+                const isVideo = /\.(mp4|mov|webm)/i.test(mediaUrl) || /\/reel\/|\/tv\//i.test(url);
+                const dl = await downloadBufferFromUrl(mediaUrl, {}, isVideo ? 'video' : 'image');
+                return { buffer: dl.buffer, isVideo, title: 'Instagram Media' };
+            }
+        } catch (_) {}
+    }
+
     throw new Error('Could not extract downloadable Instagram media from that link.');
 }
 
@@ -330,7 +598,7 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
     if (resolved === 'song') {
         // Direct audio file URL (.mp3, .m4a, .ogg, .wav)
         if (isDirectAudioUrl(cleanQuery)) {
-            const { buffer, contentType } = await downloadBufferFromUrl(cleanQuery);
+            const { buffer, contentType } = await downloadBufferFromUrl(cleanQuery, {}, 'audio');
             const rawName = decodeURIComponent(cleanQuery.split('/').pop()?.split('?')[0] || 'song.mp3');
             const title = rawName.replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[_-]+/g, ' ').trim() || 'Song';
             return {
@@ -346,9 +614,30 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
             };
         }
 
+        // Direct SoundCloud URL can also be downloaded straight via yt-dlp before falling back to YouTube search
+        if (/soundcloud\.com/i.test(cleanQuery)) {
+            try {
+                const scTitle = (await resolveTrackTitleFromMusicLink(cleanQuery)) || 'SoundCloud Track';
+                const { buffer, contentType } = await downloadWithYtDlp(cleanQuery, 'audio', false);
+                return {
+                    platform: 'song',
+                    mediaType: 'audio',
+                    title: scTitle,
+                    baileysPayload: {
+                        audio: buffer,
+                        mimetype: /audio\//i.test(contentType) ? contentType : 'audio/mpeg',
+                        ptt: false,
+                        fileName: `${scTitle.replace(/[^\w\s-]/g, '').slice(0, 60) || 'song'}.mp3`
+                    }
+                };
+            } catch (_) {
+                // Fall through to YouTube search with resolved track title
+            }
+        }
+
         const yt = await resolveYoutubeInfo(cleanQuery);
-        const stream = await fetchYoutubeStreamUrl(yt.url, 'audio');
-        const { buffer } = await downloadBufferFromUrl(stream.url, stream.headers);
+        const { buffer, contentType } = await downloadYoutubeBuffer(yt.url, 'audio');
+        const safeMime = /audio\/mp4/i.test(contentType) ? 'audio/mp4' : 'audio/mpeg';
         return {
             platform: 'song',
             mediaType: 'audio',
@@ -359,7 +648,7 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
             thumbnail: yt.thumbnail,
             baileysPayload: {
                 audio: buffer,
-                mimetype: 'audio/mpeg',
+                mimetype: safeMime,
                 ptt: false,
                 fileName: `${yt.title.replace(/[^\w\s-]/g, '').slice(0, 60) || 'song'}.mp3`
             }
@@ -368,8 +657,7 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
 
     if (resolved === 'video') {
         const yt = await resolveYoutubeInfo(cleanQuery);
-        const stream = await fetchYoutubeStreamUrl(yt.url, 'video');
-        const { buffer } = await downloadBufferFromUrl(stream.url, stream.headers);
+        const { buffer } = await downloadYoutubeBuffer(yt.url, 'video');
         const videoPayload = {
             video: buffer,
             mimetype: 'video/mp4'
@@ -390,14 +678,13 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
     }
 
     if (resolved === 'tiktok') {
-        const tt = await resolveTikTokVideo(cleanQuery);
-        const { buffer } = await downloadBufferFromUrl(tt.videoUrl);
+        const tt = await downloadTikTokBuffer(cleanQuery);
         return {
             platform: 'tiktok',
             mediaType: 'video',
             title: tt.title,
             baileysPayload: {
-                video: buffer,
+                video: tt.buffer,
                 mimetype: 'video/mp4',
                 caption: cleanCaption
             }
@@ -405,14 +692,13 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
     }
 
     if (resolved === 'facebook') {
-        const fb = await resolveFacebookVideo(cleanQuery);
-        const { buffer } = await downloadBufferFromUrl(fb.videoUrl);
+        const fb = await downloadFacebookBuffer(cleanQuery);
         return {
             platform: 'facebook',
             mediaType: 'video',
             title: fb.title,
             baileysPayload: {
-                video: buffer,
+                video: fb.buffer,
                 mimetype: 'video/mp4',
                 caption: cleanCaption
             }
@@ -420,15 +706,14 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
     }
 
     if (resolved === 'instagram') {
-        const ig = await resolveInstagramMedia(cleanQuery);
-        const { buffer } = await downloadBufferFromUrl(ig.mediaUrl);
+        const ig = await downloadInstagramBuffer(cleanQuery);
         return {
             platform: 'instagram',
             mediaType: ig.isVideo ? 'video' : 'image',
             title: ig.title,
             baileysPayload: ig.isVideo
-                ? { video: buffer, mimetype: 'video/mp4', caption: cleanCaption }
-                : { image: buffer, caption: cleanCaption }
+                ? { video: ig.buffer, mimetype: 'video/mp4', caption: cleanCaption }
+                : { image: ig.buffer, caption: cleanCaption }
         };
     }
 
@@ -439,7 +724,7 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
             mp4Url = results[0]?.mp4Url;
             if (!mp4Url) throw new Error('No matching GIF found.');
         }
-        const { buffer } = await downloadBufferFromUrl(mp4Url);
+        const { buffer } = await downloadBufferFromUrl(mp4Url, {}, 'video');
         return {
             platform: 'giphy',
             mediaType: 'gif',
@@ -453,8 +738,20 @@ async function resolveMediaPayload({ platform = 'downloader', query, caption = '
         };
     }
 
-    // Direct URL fallback
-    const { buffer, contentType } = await downloadBufferFromUrl(cleanQuery);
+    // Universal URL fallback: try yt-dlp first for social/video URLs, then direct HTTP download
+    if (/^https?:\/\//i.test(cleanQuery) && !['direct_video', 'direct_audio', 'direct_image'].includes(resolved)) {
+        try {
+            const dl = await downloadWithYtDlp(cleanQuery, 'video', false);
+            return {
+                platform: 'downloader',
+                mediaType: 'video',
+                title: 'Downloaded Video',
+                baileysPayload: { video: dl.buffer, mimetype: 'video/mp4', caption: cleanCaption }
+            };
+        } catch (_) {}
+    }
+
+    const { buffer, contentType } = await downloadBufferFromUrl(cleanQuery, {}, 'any');
     if (/audio/i.test(contentType) || resolved === 'direct_audio') {
         return {
             platform: 'downloader',

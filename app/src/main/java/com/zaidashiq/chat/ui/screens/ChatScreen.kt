@@ -11,7 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import com.zaidashiq.chat.R
 import com.zaidashiq.chat.data.model.ChatMessageItem
 import com.zaidashiq.chat.data.model.GiphyItem
+import com.zaidashiq.chat.data.model.NumberLookupResponse
 import com.zaidashiq.chat.ui.theme.*
 import com.zaidashiq.chat.ui.viewmodel.ChatToolType
 import com.zaidashiq.chat.ui.viewmodel.MainUiState
@@ -65,16 +66,27 @@ fun ChatScreen(
     onSendFakeLocation: (Double, Double, Int, String, () -> Unit) -> Unit,
     onLookupNumber: (String) -> Unit,
     onClearNumberLookup: () -> Unit,
-    onLoadOlderMessages: () -> Unit
+    onSendNumberDetailsToChat: (NumberLookupResponse) -> Unit,
+    onLoadOlderMessages: () -> Unit,
+    onOpenPrivacyAccount: () -> Unit,
+    onOpenFullDp: () -> Unit,
+    onChatAction: (action: String, value: Int?) -> Unit,
+    onExportChatBackup: () -> Unit,
+    onDismissBackupDialog: () -> Unit,
+    onLoadBotCommands: () -> Unit
 ) {
     var messageInput by remember { mutableStateOf("") }
     var isPlusMenuOpen by remember { mutableStateOf(false) }
+    var chatOverflowExpanded by remember { mutableStateOf(false) }
     var activeToolSheet by remember { mutableStateOf<ChatToolType?>(null) }
     var showNumberDetailsSheet by remember { mutableStateOf(false) }
+    var showBotCommandsSheet by remember { mutableStateOf(false) }
+    var showDisappearingDialog by remember { mutableStateOf(false) }
 
     val isSongLink by remember(messageInput) {
         derivedStateOf {
-            com.zaidashiq.chat.ui.viewmodel.isDirectSongLink(messageInput)
+            com.zaidashiq.chat.ui.viewmodel.isDirectSongLink(messageInput) ||
+                com.zaidashiq.chat.ui.viewmodel.isDirectSocialMediaLink(messageInput)
         }
     }
     val isPlayCommand by remember(messageInput, isSongLink) {
@@ -83,7 +95,16 @@ fun ChatScreen(
             isSongLink ||
                 trimmed.startsWith(".play", ignoreCase = true) ||
                 trimmed.startsWith(".song", ignoreCase = true) ||
-                trimmed.startsWith(".video", ignoreCase = true)
+                trimmed.startsWith(".video", ignoreCase = true) ||
+                trimmed.startsWith(".tiktok", ignoreCase = true) ||
+                trimmed.startsWith(".tt ", ignoreCase = true) ||
+                trimmed.startsWith(".fb", ignoreCase = true) ||
+                trimmed.startsWith(".ig", ignoreCase = true) ||
+                trimmed.startsWith(".dl", ignoreCase = true) ||
+                trimmed.startsWith(".number", ignoreCase = true) ||
+                trimmed.startsWith(".sim", ignoreCase = true) ||
+                trimmed.startsWith(".tc", ignoreCase = true) ||
+                trimmed.startsWith(".menu", ignoreCase = true)
         }
     }
 
@@ -198,16 +219,6 @@ fun ChatScreen(
                         }
 
                         IconButton(
-                            onClick = { activeToolSheet = ChatToolType.VOICE_NOTE },
-                            modifier = Modifier.testTag("chat_voice_shortcut_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Call,
-                                contentDescription = "Voice Note Shortcut",
-                                tint = TextPrimary
-                            )
-                        }
-                        IconButton(
                             onClick = { activeToolSheet = ChatToolType.VIDEO_NOTE },
                             modifier = Modifier.testTag("chat_video_shortcut_button")
                         ) {
@@ -216,6 +227,137 @@ fun ChatScreen(
                                 contentDescription = "Video Note Shortcut",
                                 tint = TextPrimary
                             )
+                        }
+
+                        // Chat 3-Dot Overflow Menu (All Bot Commands, Integrations, Ghost Privacy & Chat Controls)
+                        Box {
+                            IconButton(
+                                onClick = {
+                                    isPlusMenuOpen = false
+                                    chatOverflowExpanded = true
+                                },
+                                modifier = Modifier.testTag("chat_overflow_menu_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.MoreVert,
+                                    contentDescription = stringResource(R.string.action_more_options),
+                                    tint = TextPrimary
+                                )
+                            }
+
+                            val meta = uiState.activeChatMeta
+                            DropdownMenu(
+                                expanded = chatOverflowExpanded,
+                                onDismissRequest = { chatOverflowExpanded = false },
+                                containerColor = GlassCardElevated,
+                                shape = RoundedCornerShape(18.dp),
+                                border = BorderStroke(1.dp, GlassBorderEmerald.copy(alpha = 0.65f))
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.menu_bot_commands), color = NeonMintAccent, fontWeight = FontWeight.SemiBold) },
+                                    leadingIcon = { Icon(Icons.Rounded.Terminal, contentDescription = null, tint = NeonMintAccent) },
+                                    onClick = {
+                                        chatOverflowExpanded = false
+                                        onLoadBotCommands()
+                                        showBotCommandsSheet = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Number Details (Truecaller & SIM)", color = TextPrimary) },
+                                    leadingIcon = { Icon(Icons.Rounded.PersonSearch, contentDescription = null, tint = NeonMintAccent) },
+                                    onClick = {
+                                        chatOverflowExpanded = false
+                                        showNumberDetailsSheet = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.tool_ghost_privacy), color = TextPrimary) },
+                                    leadingIcon = { Icon(Icons.Rounded.VisibilityOff, contentDescription = null, tint = NeonMintAccent) },
+                                    onClick = {
+                                        chatOverflowExpanded = false
+                                        onOpenPrivacyAccount()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.tool_full_dp), color = TextPrimary) },
+                                    leadingIcon = { Icon(Icons.Rounded.AccountCircle, contentDescription = null, tint = NeonMintAccent) },
+                                    onClick = {
+                                        chatOverflowExpanded = false
+                                        onOpenFullDp()
+                                    }
+                                )
+                                HorizontalDivider(color = GlassBorder)
+                                DropdownMenuItem(
+                                    text = { Text("Disappearing Messages", color = TextPrimary) },
+                                    leadingIcon = { Icon(Icons.Rounded.Timer, contentDescription = null, tint = TextOnDarkMuted) },
+                                    onClick = {
+                                        chatOverflowExpanded = false
+                                        showDisappearingDialog = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (meta.muted) "Unmute Notifications" else "Mute Notifications", color = TextPrimary) },
+                                    leadingIcon = { Icon(if (meta.muted) Icons.Rounded.NotificationsActive else Icons.Rounded.NotificationsOff, contentDescription = null, tint = TextOnDarkMuted) },
+                                    onClick = {
+                                        chatOverflowExpanded = false
+                                        onChatAction(if (meta.muted) "unmute" else "mute", null)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (meta.pinned) "Unpin Chat" else "Pin Chat", color = TextPrimary) },
+                                    leadingIcon = { Icon(Icons.Rounded.PushPin, contentDescription = null, tint = TextOnDarkMuted) },
+                                    onClick = {
+                                        chatOverflowExpanded = false
+                                        onChatAction(if (meta.pinned) "unpin" else "pin", null)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (meta.archived) "Unarchive Chat" else "Archive Chat", color = TextPrimary) },
+                                    leadingIcon = { Icon(Icons.Rounded.Archive, contentDescription = null, tint = TextOnDarkMuted) },
+                                    onClick = {
+                                        chatOverflowExpanded = false
+                                        onChatAction(if (meta.archived) "unarchive" else "archive", null)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Export Chat Backup", color = TextPrimary) },
+                                    leadingIcon = { Icon(Icons.Rounded.Backup, contentDescription = null, tint = NeonMintAccent) },
+                                    onClick = {
+                                        chatOverflowExpanded = false
+                                        onExportChatBackup()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Clear Chat History", color = TextPrimary) },
+                                    leadingIcon = { Icon(Icons.Rounded.DeleteSweep, contentDescription = null, tint = TextOnDarkMuted) },
+                                    onClick = {
+                                        chatOverflowExpanded = false
+                                        onChatAction("clear", null)
+                                    }
+                                )
+                                if (!recipientJid.endsWith("@g.us")) {
+                                    HorizontalDivider(color = GlassBorder)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = if (meta.blocked) "Unblock Contact" else "Block Contact",
+                                                color = if (meta.blocked) NeonMintAccent else ErrorCoral
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = if (meta.blocked) Icons.Rounded.CheckCircleOutline else Icons.Rounded.Block,
+                                                contentDescription = null,
+                                                tint = if (meta.blocked) NeonMintAccent else ErrorCoral
+                                            )
+                                        },
+                                        onClick = {
+                                            chatOverflowExpanded = false
+                                            onChatAction(if (meta.blocked) "unblock" else "block", null)
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                     HorizontalDivider(color = GlassBorder.copy(alpha = 0.7f), thickness = 0.8.dp)
@@ -340,10 +482,10 @@ fun ChatScreen(
                     }
                 }
 
-                items(
+                itemsIndexed(
                     items = uiState.activeChatMessages,
-                    key = { it.id.ifBlank { "${it.timestamp}_${it.text.hashCode()}" } }
-                ) { msg ->
+                    key = { idx, msg -> "msg_${idx}_${msg.id.ifBlank { msg.timestamp.toString() }}" }
+                ) { _, msg ->
                     AnimatedMessageBubbleRow(message = msg)
                 }
             }
@@ -551,15 +693,46 @@ fun ChatScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 8.dp)
                 ) {
-                    // Quick Number Details item right inside + menu
+                    // Top Bot Integrations right inside + Power Menu
+                    PlusPopupMenuRow(
+                        icon = Icons.Rounded.Terminal,
+                        label = stringResource(R.string.tool_bot_commands),
+                        subtitle = "All bot commands & integrations",
+                        testTag = "plus_tool_bot_commands",
+                        onClick = {
+                            isPlusMenuOpen = false
+                            onLoadBotCommands()
+                            showBotCommandsSheet = true
+                        }
+                    )
                     PlusPopupMenuRow(
                         icon = Icons.Rounded.PersonSearch,
                         label = stringResource(R.string.tool_number_details),
-                        subtitle = "Truecaller & SIM DB",
+                        subtitle = "Truecaller & SIM DB (.number)",
                         testTag = "plus_tool_number_details",
                         onClick = {
                             isPlusMenuOpen = false
                             showNumberDetailsSheet = true
+                        }
+                    )
+                    PlusPopupMenuRow(
+                        icon = Icons.Rounded.AccountCircle,
+                        label = stringResource(R.string.tool_full_dp),
+                        subtitle = "100% uncropped DP",
+                        testTag = "plus_tool_full_dp",
+                        onClick = {
+                            isPlusMenuOpen = false
+                            onOpenFullDp()
+                        }
+                    )
+                    PlusPopupMenuRow(
+                        icon = Icons.Rounded.VisibilityOff,
+                        label = stringResource(R.string.tool_ghost_privacy),
+                        subtitle = "Freeze online, ghost status, bio",
+                        testTag = "plus_tool_ghost_privacy",
+                        onClick = {
+                            isPlusMenuOpen = false
+                            onOpenPrivacyAccount()
                         }
                     )
                     HorizontalDivider(
@@ -568,20 +741,20 @@ fun ChatScreen(
                     )
 
                     val toolItems = listOf(
-                        Triple(ChatToolType.VIDEO_NOTE, Icons.Rounded.Videocam, stringResource(R.string.tool_video_note)),
-                        Triple(ChatToolType.VOICE_NOTE, Icons.Rounded.Mic, stringResource(R.string.tool_voice_note)),
-                        Triple(ChatToolType.FAKE_LOCATION, Icons.Rounded.LocationOff, stringResource(R.string.tool_fake_location)),
-                        Triple(ChatToolType.BUTTON_MESSAGES, Icons.Rounded.SmartButton, stringResource(R.string.tool_button_messages)),
                         Triple(ChatToolType.SONG, Icons.Rounded.MusicNote, stringResource(R.string.tool_song)),
                         Triple(ChatToolType.VIDEO, Icons.Rounded.OndemandVideo, stringResource(R.string.tool_video)),
                         Triple(ChatToolType.TIKTOK, Icons.Rounded.MusicVideo, stringResource(R.string.tool_tiktok)),
                         Triple(ChatToolType.FACEBOOK, Icons.Rounded.Facebook, stringResource(R.string.tool_facebook)),
                         Triple(ChatToolType.INSTAGRAM, Icons.Rounded.PhotoCameraBack, stringResource(R.string.tool_instagram)),
-                        Triple(ChatToolType.DOWNLOADER, Icons.Rounded.DownloadForOffline, stringResource(R.string.tool_downloader))
+                        Triple(ChatToolType.DOWNLOADER, Icons.Rounded.DownloadForOffline, stringResource(R.string.tool_downloader)),
+                        Triple(ChatToolType.VIDEO_NOTE, Icons.Rounded.Videocam, stringResource(R.string.tool_video_note)),
+                        Triple(ChatToolType.VOICE_NOTE, Icons.Rounded.Mic, stringResource(R.string.tool_voice_note)),
+                        Triple(ChatToolType.FAKE_LOCATION, Icons.Rounded.LocationOff, stringResource(R.string.tool_fake_location)),
+                        Triple(ChatToolType.BUTTON_MESSAGES, Icons.Rounded.SmartButton, stringResource(R.string.tool_button_messages))
                     )
 
                     toolItems.forEachIndexed { idx, (toolType, icon, label) ->
-                        if (idx == 4) {
+                        if (idx == 6) {
                             HorizontalDivider(
                                 color = GlassBorder.copy(alpha = 0.7f),
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
@@ -591,8 +764,11 @@ fun ChatScreen(
                             icon = icon,
                             label = label,
                             subtitle = when (toolType) {
-                                ChatToolType.SONG -> "MP3 + buttons (.play / link)"
-                                ChatToolType.VIDEO -> "MP4 + buttons (.video)"
+                                ChatToolType.SONG -> "Direct YouTube/Spotify MP3 + buttons"
+                                ChatToolType.VIDEO -> "Direct YouTube MP4 + buttons"
+                                ChatToolType.TIKTOK -> "Watermark-free HD video"
+                                ChatToolType.FACEBOOK -> "Reels & watch videos"
+                                ChatToolType.INSTAGRAM -> "Reels & posts"
                                 else -> null
                             },
                             testTag = "plus_tool_${toolType.platformKey}",
@@ -614,7 +790,40 @@ fun ChatScreen(
         }
     }
 
-    // Number Details Bottom Sheet (Truecaller + SIM Database + WhatsApp Profile)
+    // All Bot Commands & Integrations Launcher Sheet
+    if (showBotCommandsSheet) {
+        BotCommandsSheet(
+            remoteCommands = uiState.botCommands,
+            onDismiss = { showBotCommandsSheet = false },
+            onSelectCommand = { cmd ->
+                showBotCommandsSheet = false
+                when (cmd.command.lowercase()) {
+                    ".play", ".song" -> activeToolSheet = ChatToolType.SONG
+                    ".video" -> activeToolSheet = ChatToolType.VIDEO
+                    ".tiktok", ".tt" -> activeToolSheet = ChatToolType.TIKTOK
+                    ".fb" -> activeToolSheet = ChatToolType.FACEBOOK
+                    ".ig" -> activeToolSheet = ChatToolType.INSTAGRAM
+                    ".dl" -> {
+                        activeToolSheet = ChatToolType.DOWNLOADER
+                        onSearchGiphy("")
+                    }
+                    ".number", ".sim", ".tc" -> showNumberDetailsSheet = true
+                    ".buttons" -> onOpenButtonComposer()
+                    ".ptv" -> activeToolSheet = ChatToolType.VIDEO_NOTE
+                    ".ptt" -> activeToolSheet = ChatToolType.VOICE_NOTE
+                    ".loc" -> activeToolSheet = ChatToolType.FAKE_LOCATION
+                    ".fdp" -> onOpenFullDp()
+                    ".ghost" -> onOpenPrivacyAccount()
+                    ".menu" -> onSendText(".menu")
+                    else -> {
+                        messageInput = "${cmd.command} "
+                    }
+                }
+            }
+        )
+    }
+
+    // Number Details Bottom Sheet (Truecaller + SIM Database + WhatsApp Profile + Send to Chat)
     if (showNumberDetailsSheet) {
         NumberDetailsSheet(
             initialNumber = recipientPhone.ifBlank { recipientJid.substringBefore("@") },
@@ -622,10 +831,74 @@ fun ChatScreen(
             result = uiState.numberLookupResult,
             errorMessage = uiState.numberLookupError,
             onSearch = onLookupNumber,
+            onSendToChat = { details ->
+                showNumberDetailsSheet = false
+                onClearNumberLookup()
+                onSendNumberDetailsToChat(details)
+            },
             onDismiss = {
                 showNumberDetailsSheet = false
                 onClearNumberLookup()
             }
+        )
+    }
+
+    // Disappearing Messages Timer Picker Dialog
+    if (showDisappearingDialog) {
+        AlertDialog(
+            onDismissRequest = { showDisappearingDialog = false },
+            containerColor = ObsidianSurface,
+            titleContentColor = TextPrimary,
+            shape = RoundedCornerShape(24.dp),
+            title = { Text("Disappearing Messages", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val timers = listOf(
+                        0 to "Off",
+                        86400 to "24 Hours",
+                        604800 to "7 Days",
+                        7776000 to "90 Days"
+                    )
+                    timers.forEach { (sec, label) ->
+                        Surface(
+                            onClick = {
+                                showDisappearingDialog = false
+                                onChatAction("disappearing", sec)
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (uiState.activeChatMeta.disappearingSeconds == sec) SoftSagePill else GlassCardSurface,
+                            border = BorderStroke(
+                                1.dp,
+                                if (uiState.activeChatMeta.disappearingSeconds == sec) NeonMintAccent else GlassBorder
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Rounded.Timer, contentDescription = null, tint = NeonMintAccent, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text(label, color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDisappearingDialog = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        )
+    }
+
+    // Chat Backup Export Dialog
+    if (!uiState.exportedBackupText.isNullOrBlank()) {
+        ExportedBackupDialog(
+            title = uiState.exportedBackupTitle.ifBlank { "Chat Backup" },
+            content = uiState.exportedBackupText,
+            onDismiss = onDismissBackupDialog
         )
     }
 
@@ -815,6 +1088,7 @@ private fun MessageBubbleRow(message: ChatMessageItem) {
                         "gif", "giphy" -> Icons.Rounded.GifBox to "GIF"
                         "location" -> Icons.Rounded.LocationOn to "Live Location"
                         "buttons" -> Icons.Rounded.SmartButton to "Interactive Buttons"
+                        "number" -> Icons.Rounded.PersonSearch to "Number Details"
                         else -> Icons.Rounded.AttachFile to message.mediaType.uppercase()
                     }
                     Row(
